@@ -49,6 +49,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<(), AppE
         // Poll transfer state before rendering so the UI reflects completion immediately
         app.poll_upload();
         app.poll_download();
+        app.poll_local_fs();
+        app.poll_remote_refresh();
         terminal.draw(|frame| ui::render(frame, &app))?;
         handle_events(&mut app)?;
 

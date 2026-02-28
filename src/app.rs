@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Instant, SystemTime};
+
+use notify::{Event as FsEvent, RecommendedWatcher, RecursiveMode, Watcher};
 
 use thiserror::Error;
 
@@ -190,6 +192,16 @@ impl PanelState {
         self.entries = entries;
         self.selected = 0;
         self.marked.clear();
+    }
+
+    /// Refresh remote entries in-place, preserving scroll position and valid marks.
+    /// Use `load_remote()` when navigating to a new path (position reset is correct there).
+    pub fn refresh_remote(&mut self, path: PathBuf, entries: Vec<FileEntry>) {
+        let new_len = entries.len();
+        self.path = path;
+        self.entries = entries;
+        self.selected = self.selected.min(new_len.saturating_sub(1));
+        self.marked.retain(|&i| i < new_len);
     }
 }
 
@@ -640,6 +652,9 @@ impl ShellDialog {
 // Overall application state
 // ---------------------------------------------------------------------------
 
+/// How often to poll the remote directory for background changes.
+const REMOTE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub struct App {
     pub left: PanelState,
     pub right: PanelState,
@@ -670,6 +685,14 @@ pub struct App {
     pub shell_dialog: Option<ShellDialog>,
     /// When true the panels are rendered swapped: remote on the left, local on the right.
     pub panels_swapped: bool,
+    /// Holds the notify watcher alive; dropping it stops the OS watch.
+    local_watcher: Option<RecommendedWatcher>,
+    /// Receive side of the notify event channel.
+    local_watcher_rx: Option<mpsc::Receiver<notify::Result<FsEvent>>>,
+    /// Path currently being watched — compared to `left.path` to detect navigation.
+    local_watched_path: Option<PathBuf>,
+    /// Timestamp of last remote refresh; None = never refreshed (fires immediately on connect).
+    last_remote_refresh: Option<Instant>,
 }
 
 impl App {
@@ -678,7 +701,7 @@ impl App {
         let mut left = PanelState::new(home.clone());
         left.load_local()?;
         let right = PanelState::new(home);
-        Ok(Self {
+        let mut app = Self {
             left,
             right,
             active: ActivePanel::Left,
@@ -696,7 +719,105 @@ impl App {
             pending_edit: None,
             shell_dialog: None,
             panels_swapped: false,
-        })
+            local_watcher: None,
+            local_watcher_rx: None,
+            local_watched_path: None,
+            last_remote_refresh: None,
+        };
+        app.start_local_watcher();
+        Ok(app)
+    }
+
+    /// Register a non-recursive notify watcher on `self.left.path`.
+    /// Drops any previous watcher first. Fails silently if the OS cannot
+    /// create a watcher (e.g. inotify limit reached).
+    pub fn start_local_watcher(&mut self) {
+        self.local_watcher = None;
+        self.local_watcher_rx = None;
+
+        let (tx, rx) = mpsc::channel::<notify::Result<FsEvent>>();
+        let watcher_result = RecommendedWatcher::new(
+            move |res| {
+                let _ = tx.send(res);
+            },
+            notify::Config::default(),
+        );
+        let mut watcher = match watcher_result {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        if watcher
+            .watch(self.left.path.as_path(), RecursiveMode::NonRecursive)
+            .is_ok()
+        {
+            self.local_watcher = Some(watcher);
+            self.local_watcher_rx = Some(rx);
+            self.local_watched_path = Some(self.left.path.clone());
+        }
+    }
+
+    /// Drain filesystem events and refresh the local panel if any arrived.
+    /// Auto-restarts the watcher when the user has navigated to a new directory.
+    pub fn poll_local_fs(&mut self) {
+        // Restart watcher if left.path changed since last watch registration.
+        if self.local_watched_path.as_deref() != Some(self.left.path.as_path()) {
+            self.start_local_watcher();
+        }
+
+        let rx = match self.local_watcher_rx.as_ref() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Coalesce: drain all pending events; only care that at least one arrived.
+        let mut got_event = false;
+        loop {
+            match rx.try_recv() {
+                Ok(_) => got_event = true,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // Watcher thread died; clear fields so we recreate on next navigation.
+                    self.local_watcher = None;
+                    self.local_watcher_rx = None;
+                    self.local_watched_path = None;
+                    break;
+                }
+            }
+        }
+
+        if got_event && !self.is_transferring() {
+            // load_local() already clamps `selected` — no extra position save needed.
+            let _ = self.left.load_local();
+        }
+    }
+
+    /// Refresh the remote panel listing on a fixed interval.
+    /// Skips when transferring or disconnected. Timer resets before the I/O
+    /// call so a slow server cannot cause back-to-back list_dir() calls.
+    pub fn poll_remote_refresh(&mut self) {
+        if self.is_transferring() || !self.is_connected() {
+            return;
+        }
+        let should_refresh = match self.last_remote_refresh {
+            None => true,
+            Some(last) => last.elapsed() >= REMOTE_REFRESH_INTERVAL,
+        };
+        if !should_refresh {
+            return;
+        }
+        // Reset timer before the I/O call to avoid rapid re-entry on slow servers.
+        self.last_remote_refresh = Some(Instant::now());
+        let conn = match self.sftp.as_mut() {
+            Some(c) => c,
+            None => return,
+        };
+        match conn.list_dir() {
+            Ok(entries) => {
+                let path = conn.remote_path.clone();
+                self.right.refresh_remote(path, entries);
+            }
+            Err(_) => {} // Transient errors are silently ignored to avoid status bar spam.
+        }
     }
 
     pub fn active_panel_mut(&mut self) -> &mut PanelState {
