@@ -116,9 +116,9 @@ fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect) {
 // New-profile form
 // ---------------------------------------------------------------------------
 
-/// Field indices: 0=Name 1=Host 2=Port 3=User 4=Auth(toggle) 5=KeyPath 6=RemotePath
-const FIELD_LABELS: &[&str] = &["Name", "Host", "Port", "User", "Auth", "Key-Pfad", "Start-Verzeichnis"];
-const FIELD_COUNT: usize = 7;
+/// Field indices: 0=Name 1=Host 2=Port 3=User 4=Auth(toggle) 5=KeyPath 6=RemotePath 7=LocalPath
+const FIELD_LABELS: &[&str] = &["Name", "Host", "Port", "User", "Auth", "Key-Pfad", "Remote-Startpfad", "Lokaler Startpfad"];
+const FIELD_COUNT: usize = 8;
 
 fn render_profile_form(frame: &mut Frame, form: &NewProfileForm, active_field: usize, area: Rect, title: &str) {
     let block = Block::default()
@@ -148,6 +148,7 @@ fn render_profile_form(frame: &mut Frame, form: &NewProfileForm, active_field: u
         form.auth.as_str(),
         &form.key_path,
         &form.remote_path,
+        &form.local_start_path,
     ];
 
     for (i, label) in FIELD_LABELS.iter().enumerate() {
@@ -195,8 +196,8 @@ fn render_profile_form(frame: &mut Frame, form: &NewProfileForm, active_field: u
         }
 
         let cursor = if is_active { "█" } else { "" };
-        // For the RemotePath field show an "(optional)" hint in the title.
-        let field_title = if i == 6 {
+        // For the RemotePath and LocalPath fields show an "(optional)" hint in the title.
+        let field_title = if i == 6 || i == 7 {
             format!(" {} (optional) ", label)
         } else {
             format!(" {} ", label)
