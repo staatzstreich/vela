@@ -315,13 +315,14 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
                     let idx = d.list_selected;
                     let p = &d.store.profiles[idx];
                     d.form = crate::app::NewProfileForm {
-                        name:        p.name.clone(),
-                        host:        p.host.clone(),
-                        port:        p.port.to_string(),
-                        user:        p.user.clone(),
-                        auth:        p.auth.clone(),
-                        key_path:    p.key_path.clone().unwrap_or_else(|| "~/.ssh/id_rsa".to_string()),
-                        remote_path: p.remote_path.clone().unwrap_or_default(),
+                        name:             p.name.clone(),
+                        host:             p.host.clone(),
+                        port:             p.port.to_string(),
+                        user:             p.user.clone(),
+                        auth:             p.auth.clone(),
+                        key_path:         p.key_path.clone().unwrap_or_else(|| "~/.ssh/id_rsa".to_string()),
+                        remote_path:      p.remote_path.clone().unwrap_or_default(),
+                        local_start_path: p.local_start_path.clone().unwrap_or_default(),
                     };
                     d.mode = ProfileDialogMode::Edit { field: 0, index: idx };
                 }
@@ -740,8 +741,8 @@ fn handle_shell_key(app: &mut App, code: KeyCode) {
 // Field navigation helpers
 // ---------------------------------------------------------------------------
 
-// Total form fields: 0=Name 1=Host 2=Port 3=User 4=Auth 5=KeyPath 6=RemotePath
-const FORM_FIELDS: usize = 7;
+/// Total form fields: 0=Name 1=Host 2=Port 3=User 4=Auth 5=KeyPath 6=RemotePath 7=LocalPath
+const FORM_FIELDS: usize = 8;
 
 fn next_field(current: usize, auth: &AuthMethod) -> usize {
     let next = (current + 1) % FORM_FIELDS;

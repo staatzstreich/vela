@@ -216,6 +216,8 @@ pub struct NewProfileForm {
     pub key_path: String,
     /// Optional remote start directory entered by the user (may be empty).
     pub remote_path: String,
+    /// Optional local start directory entered by the user (may be empty).
+    pub local_start_path: String,
 }
 
 impl NewProfileForm {
@@ -228,6 +230,7 @@ impl NewProfileForm {
             auth: AuthMethod::Key,
             key_path: "~/.ssh/id_rsa".to_string(),
             remote_path: String::new(),
+            local_start_path: String::new(),
         }
     }
 
@@ -241,6 +244,7 @@ impl NewProfileForm {
             3 => Some(&mut self.user),
             5 => Some(&mut self.key_path),
             6 => Some(&mut self.remote_path),
+            7 => Some(&mut self.local_start_path),
             _ => None,
         }
     }
@@ -265,6 +269,11 @@ impl NewProfileForm {
                 None
             } else {
                 Some(self.remote_path.trim().to_string())
+            },
+            local_start_path: if self.local_start_path.trim().is_empty() {
+                None
+            } else {
+                Some(self.local_start_path.trim().to_string())
             },
         })
     }
@@ -782,6 +791,34 @@ impl App {
                             Some(format!("Verbindung ok, Listing fehlgeschlagen: {}", e));
                         self.sftp = Some(conn);
                         self.password_dialog = None;
+                    }
+                }
+
+                // If the profile specifies a local start directory, navigate
+                // the left panel there (only if the path exists).
+                if let Some(ref local_path) = profile.local_start_path {
+                    let trimmed = local_path.trim();
+                    if !trimmed.is_empty() {
+                        let expanded = if trimmed == "~" || trimmed.starts_with("~/") {
+                            let home = dirs_or_cwd();
+                            if trimmed == "~" {
+                                home
+                            } else {
+                                home.join(&trimmed[2..])
+                            }
+                        } else {
+                            PathBuf::from(trimmed)
+                        };
+                        if expanded.is_dir() {
+                            self.left.path = expanded;
+                            self.left.selected = 0;
+                            if let Err(e) = self.left.load_local() {
+                                if let Some(ref mut msg) = self.status_message {
+                                    msg.push_str(&format!(" | Lok. Startpfad fehlgeschlagen: {}", e));
+                                }
+                            }
+                        }
+                        // Path doesn't exist → silently keep the current local directory.
                     }
                 }
             }

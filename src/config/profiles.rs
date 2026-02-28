@@ -42,6 +42,10 @@ pub struct Profile {
     /// Empty / absent means the server's login default is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_path: Option<String>,
+    /// Local directory to navigate to in the left panel right after connecting.
+    /// Empty / absent means the current local directory is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_start_path: Option<String>,
 }
 
 
