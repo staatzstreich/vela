@@ -325,6 +325,8 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
                         key_path:         p.key_path.clone().unwrap_or_else(|| "~/.ssh/id_rsa".to_string()),
                         remote_path:      p.remote_path.clone().unwrap_or_default(),
                         local_start_path: p.local_start_path.clone().unwrap_or_default(),
+                        save_password:    p.has_saved_password,
+                        password:         String::new(),
                     };
                     d.mode = ProfileDialogMode::Edit { field: 0, index: idx };
                 }
@@ -351,13 +353,13 @@ fn handle_new_form_key(app: &mut App, code: KeyCode, field: usize) {
         }
         KeyCode::Tab => {
             if let Some(d) = app.profile_dialog.as_mut() {
-                let next = next_field(field, &d.form.auth);
+                let next = next_field(field, &d.form.auth, d.form.save_password);
                 d.mode = ProfileDialogMode::New { field: next };
             }
         }
         KeyCode::BackTab => {
             if let Some(d) = app.profile_dialog.as_mut() {
-                let prev = prev_field(field, &d.form.auth);
+                let prev = prev_field(field, &d.form.auth, d.form.save_password);
                 d.mode = ProfileDialogMode::New { field: prev };
             }
         }
@@ -369,32 +371,13 @@ fn handle_new_form_key(app: &mut App, code: KeyCode, field: usize) {
                 };
             }
         }
-        KeyCode::Enter => {
+        KeyCode::Char(' ') if field == 8 => {
             if let Some(d) = app.profile_dialog.as_mut() {
-                match d.form.to_profile() {
-                    Some(profile) => {
-                        let name = profile.name.clone();
-                        d.store.add(profile);
-                        match d.save() {
-                            Ok(()) => {
-                                app.status_message =
-                                    Some(format!("Profil '{}' gespeichert", name));
-                            }
-                            Err(e) => {
-                                app.status_message =
-                                    Some(format!("Speichern fehlgeschlagen: {}", e));
-                            }
-                        }
-                        if let Some(d) = app.profile_dialog.as_mut() {
-                            d.mode = ProfileDialogMode::List;
-                        }
-                    }
-                    None => {
-                        app.status_message =
-                            Some("Name, Host und User dürfen nicht leer sein".to_string());
-                    }
-                }
+                d.form.save_password = !d.form.save_password;
             }
+        }
+        KeyCode::Enter => {
+            save_new_profile(app);
         }
         KeyCode::Backspace => {
             if let Some(d) = app.profile_dialog.as_mut() {
@@ -403,7 +386,7 @@ fn handle_new_form_key(app: &mut App, code: KeyCode, field: usize) {
                 }
             }
         }
-        KeyCode::Char(c) if field != 4 => {
+        KeyCode::Char(c) if field != 4 && field != 8 => {
             if let Some(d) = app.profile_dialog.as_mut() {
                 if field == 2 && !c.is_ascii_digit() {
                     return;
@@ -414,6 +397,53 @@ fn handle_new_form_key(app: &mut App, code: KeyCode, field: usize) {
             }
         }
         _ => {}
+    }
+}
+
+/// Save a new profile with keychain handling.
+/// Keychain operations run BEFORE the TOML save so that
+/// `has_saved_password` always reflects the real keychain state.
+fn save_new_profile(app: &mut App) {
+    if let Some(d) = app.profile_dialog.as_mut() {
+        let pw_to_save = d.form.password.clone();
+        let wants_save = d.form.save_password && !pw_to_save.is_empty();
+        match d.form.to_profile() {
+            Some(mut profile) => {
+                let name = profile.name.clone();
+                let mut msg = format!("Profil '{}' gespeichert", name);
+                // Attempt keychain save first; only flag the profile
+                // as having a saved password when it actually succeeds.
+                if wants_save {
+                    match crate::config::profiles::save_password(&name, &pw_to_save) {
+                        Ok(()) => {
+                            profile.has_saved_password = true;
+                            msg.push_str(" — Passwort im Keychain gespeichert");
+                        }
+                        Err(e) => {
+                            profile.has_saved_password = false;
+                            msg.push_str(&format!(" — Keychain-Fehler: {}", e));
+                        }
+                    }
+                } else {
+                    profile.has_saved_password = false;
+                }
+                d.store.add(profile);
+                match d.save() {
+                    Ok(()) => app.status_message = Some(msg),
+                    Err(e) => {
+                        app.status_message =
+                            Some(format!("Speichern fehlgeschlagen: {}", e));
+                    }
+                }
+                if let Some(d) = app.profile_dialog.as_mut() {
+                    d.mode = ProfileDialogMode::List;
+                }
+            }
+            None => {
+                app.status_message =
+                    Some("Name, Host und User dürfen nicht leer sein".to_string());
+            }
+        }
     }
 }
 
@@ -426,13 +456,13 @@ fn handle_edit_form_key(app: &mut App, code: KeyCode, field: usize, index: usize
         }
         KeyCode::Tab => {
             if let Some(d) = app.profile_dialog.as_mut() {
-                let next = next_field(field, &d.form.auth);
+                let next = next_field(field, &d.form.auth, d.form.save_password);
                 d.mode = ProfileDialogMode::Edit { field: next, index };
             }
         }
         KeyCode::BackTab => {
             if let Some(d) = app.profile_dialog.as_mut() {
-                let prev = prev_field(field, &d.form.auth);
+                let prev = prev_field(field, &d.form.auth, d.form.save_password);
                 d.mode = ProfileDialogMode::Edit { field: prev, index };
             }
         }
@@ -444,32 +474,13 @@ fn handle_edit_form_key(app: &mut App, code: KeyCode, field: usize, index: usize
                 };
             }
         }
-        KeyCode::Enter => {
+        KeyCode::Char(' ') if field == 8 => {
             if let Some(d) = app.profile_dialog.as_mut() {
-                match d.form.to_profile() {
-                    Some(profile) => {
-                        let name = profile.name.clone();
-                        d.store.update(index, profile);
-                        match d.save() {
-                            Ok(()) => {
-                                app.status_message =
-                                    Some(format!("Profil '{}' aktualisiert", name));
-                            }
-                            Err(e) => {
-                                app.status_message =
-                                    Some(format!("Speichern fehlgeschlagen: {}", e));
-                            }
-                        }
-                        if let Some(d) = app.profile_dialog.as_mut() {
-                            d.mode = ProfileDialogMode::List;
-                        }
-                    }
-                    None => {
-                        app.status_message =
-                            Some("Name, Host und User dürfen nicht leer sein".to_string());
-                    }
-                }
+                d.form.save_password = !d.form.save_password;
             }
+        }
+        KeyCode::Enter => {
+            save_edited_profile(app, index);
         }
         KeyCode::Backspace => {
             if let Some(d) = app.profile_dialog.as_mut() {
@@ -478,7 +489,7 @@ fn handle_edit_form_key(app: &mut App, code: KeyCode, field: usize, index: usize
                 }
             }
         }
-        KeyCode::Char(c) if field != 4 => {
+        KeyCode::Char(c) if field != 4 && field != 8 => {
             if let Some(d) = app.profile_dialog.as_mut() {
                 if field == 2 && !c.is_ascii_digit() {
                     return;
@@ -492,10 +503,78 @@ fn handle_edit_form_key(app: &mut App, code: KeyCode, field: usize, index: usize
     }
 }
 
+/// Save an edited profile with keychain handling.
+/// Keychain operations run BEFORE the TOML save so that
+/// `has_saved_password` always reflects the real keychain state.
+fn save_edited_profile(app: &mut App, index: usize) {
+    if let Some(d) = app.profile_dialog.as_mut() {
+        let pw_to_save = d.form.password.clone();
+        let wants_save = d.form.save_password && !pw_to_save.is_empty();
+        let wants_delete = !d.form.save_password;
+        let original_had_saved = d
+            .store
+            .profiles
+            .get(index)
+            .map(|p| p.has_saved_password)
+            .unwrap_or(false);
+        match d.form.to_profile() {
+            Some(mut profile) => {
+                let name = profile.name.clone();
+                let mut msg = format!("Profil '{}' aktualisiert", name);
+                if wants_save {
+                    // User entered a new password — store in keychain.
+                    match crate::config::profiles::save_password(&name, &pw_to_save) {
+                        Ok(()) => {
+                            profile.has_saved_password = true;
+                            msg.push_str(" — Passwort im Keychain gespeichert");
+                        }
+                        Err(e) => {
+                            profile.has_saved_password = original_had_saved;
+                            msg.push_str(&format!(" — Keychain-Fehler: {}", e));
+                        }
+                    }
+                } else if wants_delete {
+                    // User toggled save off — remove from keychain.
+                    let _ = crate::config::profiles::delete_password(&name);
+                    profile.has_saved_password = false;
+                } else {
+                    // Toggle is on but no new password entered.
+                    // Keep the original keychain state untouched.
+                    profile.has_saved_password = original_had_saved;
+                }
+                d.store.update(index, profile);
+                match d.save() {
+                    Ok(()) => app.status_message = Some(msg),
+                    Err(e) => {
+                        app.status_message =
+                            Some(format!("Speichern fehlgeschlagen: {}", e));
+                    }
+                }
+                if let Some(d) = app.profile_dialog.as_mut() {
+                    d.mode = ProfileDialogMode::List;
+                }
+            }
+            None => {
+                app.status_message =
+                    Some("Name, Host und User dürfen nicht leer sein".to_string());
+            }
+        }
+    }
+}
+
 fn handle_confirm_delete_key(app: &mut App, code: KeyCode, index: usize) {
     match code {
         KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
             if let Some(d) = app.profile_dialog.as_mut() {
+                // Delete the keychain entry before removing the profile.
+                let profile_name = d
+                    .store
+                    .profiles
+                    .get(index)
+                    .map(|p| p.name.clone());
+                if let Some(ref name) = profile_name {
+                    let _ = crate::config::profiles::delete_password(name);
+                }
                 d.store.remove(index);
                 let len = d.store.profiles.len();
                 if d.list_selected >= len && len > 0 {
@@ -743,25 +822,40 @@ fn handle_shell_key(app: &mut App, code: KeyCode) {
 // Field navigation helpers
 // ---------------------------------------------------------------------------
 
-/// Total form fields: 0=Name 1=Host 2=Port 3=User 4=Auth 5=KeyPath 6=RemotePath 7=LocalPath
-const FORM_FIELDS: usize = 8;
+/// Total form fields:
+/// 0=Name 1=Host 2=Port 3=User 4=Auth 5=KeyPath
+/// 6=RemotePath 7=LocalPath 8=SavePassword 9=Password
+const FORM_FIELDS: usize = 10;
 
-fn next_field(current: usize, auth: &AuthMethod) -> usize {
-    let next = (current + 1) % FORM_FIELDS;
-    // Skip KeyPath (5) when using Password auth — it is irrelevant.
-    if next == 5 && *auth == AuthMethod::Password {
-        6
-    } else {
-        next
+/// Determine whether a field is visible given the current form state.
+fn field_visible(idx: usize, auth: &AuthMethod, save_pw: bool) -> bool {
+    match idx {
+        5 => *auth == AuthMethod::Key,
+        8 => *auth == AuthMethod::Password,
+        9 => *auth == AuthMethod::Password && save_pw,
+        _ => true,
     }
 }
 
-fn prev_field(current: usize, auth: &AuthMethod) -> usize {
-    let prev = if current == 0 { FORM_FIELDS - 1 } else { current - 1 };
-    // Skip KeyPath (5) when using Password auth.
-    if prev == 5 && *auth == AuthMethod::Password {
-        4
-    } else {
-        prev
+fn next_field(current: usize, auth: &AuthMethod, save_pw: bool) -> usize {
+    let mut next = (current + 1) % FORM_FIELDS;
+    // Walk forward, skipping invisible fields (max one full cycle).
+    for _ in 0..FORM_FIELDS {
+        if field_visible(next, auth, save_pw) {
+            return next;
+        }
+        next = (next + 1) % FORM_FIELDS;
     }
+    current
+}
+
+fn prev_field(current: usize, auth: &AuthMethod, save_pw: bool) -> usize {
+    let mut prev = if current == 0 { FORM_FIELDS - 1 } else { current - 1 };
+    for _ in 0..FORM_FIELDS {
+        if field_visible(prev, auth, save_pw) {
+            return prev;
+        }
+        prev = if prev == 0 { FORM_FIELDS - 1 } else { prev - 1 };
+    }
+    current
 }
