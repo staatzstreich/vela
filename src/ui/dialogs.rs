@@ -113,14 +113,37 @@ fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
-// New-profile form
+// New-profile form (dynamic layout — only visible fields get rows)
 // ---------------------------------------------------------------------------
 
-/// Field indices: 0=Name 1=Host 2=Port 3=User 4=Auth(toggle) 5=KeyPath 6=RemotePath 7=LocalPath
-const FIELD_LABELS: &[&str] = &["Name", "Host", "Port", "User", "Auth", "Key-Pfad", "Remote-Startpfad", "Lokaler Startpfad"];
-const FIELD_COUNT: usize = 8;
+/// All possible fields with their logical index and label.
+const ALL_FIELDS: &[(usize, &str)] = &[
+    (0, "Name"), (1, "Host"), (2, "Port"), (3, "User"),
+    (4, "Auth"), (5, "Key-Pfad"), (6, "Remote-Startpfad"),
+    (7, "Lokaler Startpfad"), (8, "Passwort speichern"), (9, "Passwort"),
+];
 
-fn render_profile_form(frame: &mut Frame, form: &NewProfileForm, active_field: usize, area: Rect, title: &str) {
+/// Return only the fields that should be visible for the current form state.
+fn visible_fields(form: &NewProfileForm) -> Vec<(usize, &'static str)> {
+    ALL_FIELDS
+        .iter()
+        .filter(|(idx, _)| match *idx {
+            5 => form.auth == AuthMethod::Key,
+            8 => form.auth == AuthMethod::Password,
+            9 => form.auth == AuthMethod::Password && form.save_password,
+            _ => true,
+        })
+        .copied()
+        .collect()
+}
+
+fn render_profile_form(
+    frame: &mut Frame,
+    form: &NewProfileForm,
+    active_field: usize,
+    area: Rect,
+    title: &str,
+) {
     let block = Block::default()
         .title(title.to_string())
         .borders(Borders::ALL)
@@ -129,91 +152,66 @@ fn render_profile_form(frame: &mut Frame, form: &NewProfileForm, active_field: u
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut constraints: Vec<Constraint> = (0..FIELD_COUNT)
-        .map(|_| Constraint::Length(3))
-        .collect();
-    constraints.push(Constraint::Min(0));
-    constraints.push(Constraint::Length(1));
+    let vis = visible_fields(form);
+    let n = vis.len();
+    let mut constraints: Vec<Constraint> =
+        (0..n).map(|_| Constraint::Length(3)).collect();
+    constraints.push(Constraint::Min(0)); // spacer
+    constraints.push(Constraint::Length(1)); // hints
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(inner);
 
-    let field_values: [&str; FIELD_COUNT] = [
-        &form.name,
-        &form.host,
-        &form.port,
-        &form.user,
-        form.auth.as_str(),
-        &form.key_path,
-        &form.remote_path,
-        &form.local_start_path,
-    ];
-
-    for (i, label) in FIELD_LABELS.iter().enumerate() {
-        let is_active = i == active_field;
+    for (row_idx, &(field_idx, label)) in vis.iter().enumerate() {
+        let is_active = field_idx == active_field;
         let border_style = if is_active {
             Style::default().fg(Color::Cyan)
         } else {
             Style::default().fg(Color::DarkGray)
         };
-        let value_style = if is_active {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
 
-        // Auth field: toggle display
-        if i == 4 {
-            let (key_style, pw_style) = if form.auth == AuthMethod::Key {
-                (
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                    Style::default().fg(Color::DarkGray),
-                )
-            } else {
-                (
-                    Style::default().fg(Color::DarkGray),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                )
-            };
-            let hint = if is_active { "  [Space zum Wechseln]" } else { "" };
-            let field_block = Block::default()
-                .title(format!(" {} ", label))
-                .borders(Borders::ALL)
-                .border_style(border_style);
-            let auth_line = Line::from(vec![
-                Span::styled("● key", key_style),
-                Span::raw("   "),
-                Span::styled("● password", pw_style),
-                Span::styled(hint, Style::default().fg(Color::DarkGray)),
-            ]);
-            frame.render_widget(
-                Paragraph::new(auth_line).block(field_block),
-                rows[i],
-            );
-            continue;
+        match field_idx {
+            4 => render_auth_toggle(frame, form, is_active, border_style, label, rows[row_idx]),
+            8 => render_save_pw_toggle(frame, form, is_active, border_style, label, rows[row_idx]),
+            9 => render_password_field(frame, form, is_active, border_style, rows[row_idx]),
+            _ => {
+                let value = match field_idx {
+                    0 => &form.name,
+                    1 => &form.host,
+                    2 => &form.port,
+                    3 => &form.user,
+                    5 => &form.key_path,
+                    6 => &form.remote_path,
+                    7 => &form.local_start_path,
+                    _ => "",
+                };
+                let value_style = if is_active {
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let cursor = if is_active { "█" } else { "" };
+                let field_title = if field_idx == 6 || field_idx == 7 {
+                    format!(" {} (optional) ", label)
+                } else {
+                    format!(" {} ", label)
+                };
+                let field_block = Block::default()
+                    .title(field_title)
+                    .borders(Borders::ALL)
+                    .border_style(border_style);
+                let content = Line::from(vec![
+                    Span::styled(value, value_style),
+                    Span::styled(cursor, Style::default().fg(Color::Cyan)),
+                ]);
+                frame.render_widget(
+                    Paragraph::new(content).block(field_block),
+                    rows[row_idx],
+                );
+            }
         }
-
-        let cursor = if is_active { "█" } else { "" };
-        // For the RemotePath and LocalPath fields show an "(optional)" hint in the title.
-        let field_title = if i == 6 || i == 7 {
-            format!(" {} (optional) ", label)
-        } else {
-            format!(" {} ", label)
-        };
-        let field_block = Block::default()
-            .title(field_title)
-            .borders(Borders::ALL)
-            .border_style(border_style);
-        let content = Line::from(vec![
-            Span::styled(field_values[i], value_style),
-            Span::styled(cursor, Style::default().fg(Color::Cyan)),
-        ]);
-        frame.render_widget(
-            Paragraph::new(content).block(field_block),
-            rows[i],
-        );
     }
 
     // Hint bar at bottom
@@ -223,6 +221,89 @@ fn render_profile_form(frame: &mut Frame, form: &NewProfileForm, active_field: u
         hint_key("Esc"), hint_label(" Abbrechen"),
     ]);
     frame.render_widget(Paragraph::new(hints), *rows.last().unwrap());
+}
+
+/// Render the Auth toggle field (key / password).
+fn render_auth_toggle(
+    frame: &mut Frame, form: &NewProfileForm,
+    is_active: bool, border_style: Style, label: &str, area: Rect,
+) {
+    let (key_style, pw_style) = if form.auth == AuthMethod::Key {
+        (
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        (
+            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        )
+    };
+    let hint = if is_active { "  [Space]" } else { "" };
+    let field_block = Block::default()
+        .title(format!(" {} ", label))
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let auth_line = Line::from(vec![
+        Span::styled("● key", key_style),
+        Span::raw("   "),
+        Span::styled("● password", pw_style),
+        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(Paragraph::new(auth_line).block(field_block), area);
+}
+
+/// Render the "Passwort speichern" toggle field (Ja / Nein).
+fn render_save_pw_toggle(
+    frame: &mut Frame, form: &NewProfileForm,
+    is_active: bool, border_style: Style, label: &str, area: Rect,
+) {
+    let (ja_style, nein_style) = if form.save_password {
+        (
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        (
+            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        )
+    };
+    let hint = if is_active { "  [Space]" } else { "" };
+    let field_block = Block::default()
+        .title(format!(" {} ", label))
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let toggle_line = Line::from(vec![
+        Span::styled("● Ja", ja_style),
+        Span::raw("   "),
+        Span::styled("● Nein", nein_style),
+        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(Paragraph::new(toggle_line).block(field_block), area);
+}
+
+/// Render the masked password input field.
+fn render_password_field(
+    frame: &mut Frame, form: &NewProfileForm,
+    is_active: bool, border_style: Style, area: Rect,
+) {
+    let masked: String = "●".repeat(form.password.len());
+    let value_style = if is_active {
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let cursor = if is_active { "█" } else { "" };
+    let field_block = Block::default()
+        .title(" Passwort ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    let content = Line::from(vec![
+        Span::styled(masked, value_style),
+        Span::styled(cursor, Style::default().fg(Color::Cyan)),
+    ]);
+    frame.render_widget(Paragraph::new(content).block(field_block), area);
 }
 
 // ---------------------------------------------------------------------------

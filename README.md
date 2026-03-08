@@ -48,10 +48,28 @@ If you ever missed a simple File Transfer Utility, Vela is for you. It lives in 
 - Diff local vs remote files
 - Change permissions (chmod) on remote files
 - Transfer progress bar with file count
+- Encrypted password storage via OS keychain (macOS Keychain / Linux Secret Service)
 
 ---
 
 ## Installation
+
+### Prerequisites
+
+**Linux only** — Vela uses the D-Bus Secret Service for password storage. Install the required system library before building:
+
+```bash
+# Debian / Ubuntu
+sudo apt install libdbus-1-dev pkg-config
+
+# Fedora
+sudo dnf install dbus-devel
+
+# Arch
+sudo pacman -S dbus
+```
+
+On macOS no extra dependencies are needed (uses the native Keychain).
 
 ### From source
 

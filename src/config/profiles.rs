@@ -12,6 +12,8 @@ pub enum ConfigError {
     TomlParse(#[from] toml::de::Error),
     #[error("TOML serialize error: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
+    #[error("Keyring error: {0}")]
+    Keyring(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,8 +48,14 @@ pub struct Profile {
     /// Empty / absent means the current local directory is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_start_path: Option<String>,
+    /// Whether a password is stored in the OS keychain for this profile.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_saved_password: bool,
 }
 
+fn is_false(v: &bool) -> bool {
+    !v
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ProfileStore {
@@ -98,4 +106,44 @@ fn config_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
     base.join(".config").join("vela").join("profiles.toml")
+}
+
+// ---------------------------------------------------------------------------
+// Keyring helpers — store/load/delete passwords via OS keychain
+// ---------------------------------------------------------------------------
+
+const KEYRING_SERVICE: &str = "vela";
+
+/// Build the keyring entry for a profile: service="vela", user=profile_name.
+fn keyring_entry(profile_name: &str) -> Result<keyring::Entry, ConfigError> {
+    keyring::Entry::new(KEYRING_SERVICE, profile_name)
+        .map_err(|e| ConfigError::Keyring(e.to_string()))
+}
+
+/// Store a password in the OS keychain for the given profile name.
+pub fn save_password(profile_name: &str, password: &str) -> Result<(), ConfigError> {
+    let entry = keyring_entry(profile_name)?;
+    entry
+        .set_password(password)
+        .map_err(|e| ConfigError::Keyring(e.to_string()))
+}
+
+/// Load a password from the OS keychain. Returns `None` if not found.
+pub fn load_password(profile_name: &str) -> Result<Option<String>, ConfigError> {
+    let entry = keyring_entry(profile_name)?;
+    match entry.get_password() {
+        Ok(pw) => Ok(Some(pw)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(ConfigError::Keyring(e.to_string())),
+    }
+}
+
+/// Delete a password from the OS keychain. Ignores "not found" errors.
+pub fn delete_password(profile_name: &str) -> Result<(), ConfigError> {
+    let entry = keyring_entry(profile_name)?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(ConfigError::Keyring(e.to_string())),
+    }
 }

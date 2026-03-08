@@ -230,6 +230,10 @@ pub struct NewProfileForm {
     pub remote_path: String,
     /// Optional local start directory entered by the user (may be empty).
     pub local_start_path: String,
+    /// Whether the user wants to store the password in the OS keychain.
+    pub save_password: bool,
+    /// Password text entered for keychain storage (never persisted to TOML).
+    pub password: String,
 }
 
 impl NewProfileForm {
@@ -243,11 +247,14 @@ impl NewProfileForm {
             key_path: "~/.ssh/id_rsa".to_string(),
             remote_path: String::new(),
             local_start_path: String::new(),
+            save_password: false,
+            password: String::new(),
         }
     }
 
     /// Return a mutable reference to the string field at `field` index.
-    /// Field 4 (Auth toggle) has no string backing — returns None.
+    /// Fields 4 (Auth toggle) and 8 (save_password toggle) have no
+    /// string backing — returns None.
     pub fn active_field_mut(&mut self, field: usize) -> Option<&mut String> {
         match field {
             0 => Some(&mut self.name),
@@ -257,6 +264,7 @@ impl NewProfileForm {
             5 => Some(&mut self.key_path),
             6 => Some(&mut self.remote_path),
             7 => Some(&mut self.local_start_path),
+            9 => Some(&mut self.password),
             _ => None,
         }
     }
@@ -287,6 +295,9 @@ impl NewProfileForm {
             } else {
                 Some(self.local_start_path.trim().to_string())
             },
+            // Placeholder — callers (save_new_profile / save_edited_profile)
+            // override this based on actual keychain result.
+            has_saved_password: self.save_password,
         })
     }
 }
@@ -847,11 +858,21 @@ impl App {
         self.profile_dialog = None;
     }
 
-    /// Initiate connection with a profile. If auth=password, opens the password
-    /// dialog first. If auth=key, connects immediately.
+    /// Initiate connection with a profile.
+    /// For password auth: try loading a saved password from the OS keychain
+    /// first; only show the password dialog if no keychain entry exists.
+    /// For key auth: connects immediately.
     pub fn begin_connect(&mut self, profile: Profile) {
         match profile.auth {
             AuthMethod::Password => {
+                if profile.has_saved_password {
+                    if let Ok(Some(pw)) =
+                        crate::config::profiles::load_password(&profile.name)
+                    {
+                        self.do_connect(profile, Some(&pw));
+                        return;
+                    }
+                }
                 self.password_dialog = Some(PasswordDialog::new(profile));
             }
             AuthMethod::Key => {
