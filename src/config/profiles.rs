@@ -17,6 +17,8 @@ pub enum ConfigError {
     UnsafePermissions { path: String, mode: u32 },
     #[error("Keyring error: {0}")]
     Keyring(String),
+    #[error("HOME directory not set — cannot locate profile config")]
+    HomeDirNotFound,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,7 +70,7 @@ pub struct ProfileStore {
 
 impl ProfileStore {
     pub fn load() -> Result<Self, ConfigError> {
-        let path = config_path();
+        let path = config_path()?;
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -88,7 +90,7 @@ impl ProfileStore {
     }
 
     pub fn save(&self) -> Result<(), ConfigError> {
-        let path = config_path();
+        let path = config_path()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -116,11 +118,11 @@ impl ProfileStore {
     }
 }
 
-fn config_path() -> PathBuf {
-    let base = std::env::var("HOME")
+fn config_path() -> Result<PathBuf, ConfigError> {
+    let home = std::env::var("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    base.join(".config").join("vela").join("profiles.toml")
+        .map_err(|_| ConfigError::HomeDirNotFound)?;
+    Ok(home.join(".config").join("vela").join("profiles.toml"))
 }
 
 // ---------------------------------------------------------------------------

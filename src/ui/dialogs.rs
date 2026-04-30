@@ -7,8 +7,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    DeleteDialog, MkdirDialog, NewProfileForm, PasswordDialog, PermissionFixDialog, ProfileDialog,
-    ProfileDialogMode, RenameDialog, ShellDialog,
+    DeleteDialog, HostKeyDialog, MkdirDialog, NewProfileForm, PasswordDialog, PermissionFixDialog,
+    ProfileDialog, ProfileDialogMode, RenameDialog, ShellDialog,
 };
 use crate::config::profiles::AuthMethod;
 
@@ -926,6 +926,70 @@ pub fn render_permission_dialog(frame: &mut Frame, dlg: &PermissionFixDialog) {
         .alignment(Alignment::Left);
 
     let area = centered_rect(60, 50, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(para, area);
+}
+
+// ---------------------------------------------------------------------------
+// Unknown host key dialog
+// ---------------------------------------------------------------------------
+
+pub fn render_host_key_dialog(frame: &mut Frame, dlg: &HostKeyDialog) {
+    let message_lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled(
+                "⚠   Unbekannter Host-Key!   ⚠",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Host:        "),
+            Span::styled(
+                format!("{}:{}", dlg.host, dlg.port),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("Key-Typ:     "),
+            Span::styled(&dlg.key_type, Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::raw("Fingerprint: "),
+            Span::styled(&dlg.fingerprint, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Dieser Host ist "),
+            Span::styled("nicht", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(" in ~/.ssh/known_hosts vorhanden."),
+        ]),
+        Line::from(vec![
+            Span::raw("Bitte prüfe den Fingerprint aus einer vertrauenswürdigen Quelle."),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Y / Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" — Vertrauen und zu known_hosts hinzufügen"),
+        ]),
+        Line::from(vec![
+            Span::styled("N / Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("   — Verbindung abbrechen"),
+        ]),
+    ];
+
+    let block = Block::default()
+        .title(" Unbekannter Host-Key ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let para = Paragraph::new(Text::from(message_lines))
+        .wrap(Wrap { trim: false })
+        .block(block)
+        .alignment(Alignment::Left);
+
+    let area = centered_rect(65, 55, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(para, area);
 }

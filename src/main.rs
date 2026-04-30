@@ -112,12 +112,15 @@ fn launch_editor(
             disable_raw_mode()?;
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-            let parts: Vec<&str> = editor.split_whitespace().collect();
-            let mut cmd = std::process::Command::new(parts[0]);
-            for arg in &parts[1..] {
-                cmd.arg(arg);
+            // shell-words correctly handles quoted arguments (e.g. "code --wait")
+            let parts = shell_words::split(&editor).unwrap_or_else(|_| vec![editor.clone()]);
+            if let Some(bin) = parts.first() {
+                let mut cmd = std::process::Command::new(bin);
+                for arg in &parts[1..] {
+                    cmd.arg(arg);
+                }
+                let _ = cmd.arg(path).status();
             }
-            let _ = cmd.arg(path).status();
 
             // Re-enter alternate screen and raw mode
             enable_raw_mode()?;
@@ -162,8 +165,10 @@ fn handle_events(app: &mut App) -> Result<(), AppError> {
             return Ok(());
         }
 
-        // Priority (highest first): password > delete > rename > mkdir > shell > profile > main
-        if app.permission_dialog.is_some() {
+        // Priority (highest first): host_key > permission > password > delete > rename > mkdir > shell > profile > main
+        if app.host_key_dialog.is_some() {
+            handle_host_key_key(app, key.code);
+        } else if app.permission_dialog.is_some() {
             handle_permission_key(app, key.code);
         } else if app.password_dialog.is_some() {
             handle_password_key(app, key.code);
@@ -883,6 +888,14 @@ fn handle_permission_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('f') | KeyCode::Char('F') => app.fix_permission_dialog(),
         KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Esc => app.dismiss_permission_dialog(),
+        _ => {}
+    }
+}
+
+fn handle_host_key_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => app.confirm_host_key(),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.abort_host_key(),
         _ => {}
     }
 }

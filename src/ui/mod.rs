@@ -9,8 +9,9 @@ use ratatui::{
 
 use crate::app::App;
 use dialogs::{
-    render_delete_dialog, render_help_dialog, render_mkdir_dialog, render_password_dialog,
-    render_permission_dialog, render_profile_dialog, render_rename_dialog, render_shell_dialog,
+    render_delete_dialog, render_help_dialog, render_host_key_dialog, render_mkdir_dialog,
+    render_password_dialog, render_permission_dialog, render_profile_dialog, render_rename_dialog,
+    render_shell_dialog,
 };
 use panels::render_panels;
 use statusbar::render_statusbar;
@@ -57,6 +58,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if let Some(ref dlg) = app.permission_dialog {
         render_permission_dialog(frame, dlg);
+    }
+    if let Some(ref dlg) = app.host_key_dialog {
+        render_host_key_dialog(frame, dlg);
     }
     // Help overlay on top of everything else
     if app.help_visible {

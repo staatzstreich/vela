@@ -11,8 +11,8 @@ use thiserror::Error;
 
 use crate::config::profiles::{AuthMethod, ConfigError, Profile, ProfileStore};
 use crate::connection::sftp::{
-    count_files, download_batch, download_file_to_dir, upload_batch, upload_file_fresh,
-    SftpConnection, SftpError,
+    add_to_known_hosts, count_files, download_batch, download_file_to_dir, upload_batch,
+    upload_file_fresh, SftpConnection, SftpError,
 };
 use crate::transfer::queue::{
     ProgressHandle, TransferHandle, TransferProgress, TransferState, UploadProgress, UploadState,
@@ -581,6 +581,8 @@ pub enum EditRequest {
         remote_path: std::path::PathBuf,
         /// mtime of temp file before the editor was launched.
         mtime_before: SystemTime,
+        /// Owns the temp directory; auto-deleted when this value is dropped.
+        _temp_dir: tempfile::TempDir,
     },
 }
 
@@ -673,6 +675,16 @@ pub struct PermissionFixDialog {
     pub mode: u32,
 }
 
+pub struct HostKeyDialog {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+    pub key_type: String,
+    pub key_bytes: Vec<u8>,
+    pub profile: Profile,
+    pub password: Option<String>,
+}
+
 pub struct App {
     pub left: PanelState,
     pub right: PanelState,
@@ -703,6 +715,8 @@ pub struct App {
     pub shell_dialog: Option<ShellDialog>,
     /// Permission fix dialog for profile config
     pub permission_dialog: Option<PermissionFixDialog>,
+    /// Unknown-host-key confirmation dialog
+    pub host_key_dialog: Option<HostKeyDialog>,
     /// When true the panels are rendered swapped: remote on the left, local on the right.
     pub panels_swapped: bool,
     /// Holds the notify watcher alive; dropping it stops the OS watch.
@@ -739,6 +753,7 @@ impl App {
             pending_edit: None,
             shell_dialog: None,
             permission_dialog: None,
+            host_key_dialog: None,
             panels_swapped: false,
             local_watcher: None,
             local_watcher_rx: None,
@@ -1000,6 +1015,17 @@ impl App {
                     }
                 }
             }
+            Err(SftpError::UnknownHostKey { host, port, fingerprint, key_type, key_bytes }) => {
+                self.host_key_dialog = Some(HostKeyDialog {
+                    host,
+                    port,
+                    fingerprint,
+                    key_type,
+                    key_bytes,
+                    profile: profile.clone(),
+                    password: password.map(|s| s.to_string()),
+                });
+            }
             Err(e) => {
                 if let Some(ref mut dlg) = self.password_dialog {
                     dlg.error = Some(e.to_string());
@@ -1008,6 +1034,26 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Accept the unknown host key, write it to known_hosts, and reconnect.
+    pub fn confirm_host_key(&mut self) {
+        if let Some(dlg) = self.host_key_dialog.take() {
+            match add_to_known_hosts(&dlg.host, dlg.port, &dlg.key_type, &dlg.key_bytes) {
+                Ok(()) => {
+                    self.do_connect(dlg.profile, dlg.password.as_deref());
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("known_hosts schreiben fehlgeschlagen: {}", e));
+                }
+            }
+        }
+    }
+
+    /// Dismiss the host key dialog without connecting.
+    pub fn abort_host_key(&mut self) {
+        self.host_key_dialog = None;
+        self.status_message = Some("Verbindung abgebrochen (unbekannter Host-Key)".to_string());
     }
 
     /// Disconnect the active SFTP session and clear the right panel.
@@ -1597,12 +1643,15 @@ impl App {
                     None => return,
                 };
                 let remote_path = conn.remote_path.join(&entry.name);
-                let temp_dir = std::env::temp_dir().join("vela_edit");
-                if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-                    self.status_message = Some(format!("Temp-Verzeichnis: {}", e));
-                    return;
-                }
-                match download_file_to_dir(conn.sftp(), &remote_path, &temp_dir) {
+                let temp_dir = match tempfile::TempDir::new() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        self.status_message = Some(format!("Temp-Verzeichnis: {}", e));
+                        return;
+                    }
+                };
+                let temp_dir_path = temp_dir.path().to_path_buf();
+                match download_file_to_dir(conn.sftp(), &remote_path, &temp_dir_path) {
                     Ok(temp_path) => {
                         let mtime_before = std::fs::metadata(&temp_path)
                             .and_then(|m| m.modified())
@@ -1611,6 +1660,7 @@ impl App {
                             temp_path,
                             remote_path,
                             mtime_before,
+                            _temp_dir: temp_dir,
                         });
                     }
                     Err(e) => {
@@ -1630,7 +1680,7 @@ impl App {
                 self.left.load_local()?;
                 self.status_message = Some("Editor geschlossen".to_string());
             }
-            EditRequest::Remote { temp_path, remote_path, mtime_before } => {
+            EditRequest::Remote { temp_path, remote_path, mtime_before, .. } => {
                 let changed = std::fs::metadata(&temp_path)
                     .and_then(|m| m.modified())
                     .map(|t| t > mtime_before)
@@ -1639,14 +1689,11 @@ impl App {
                 if changed {
                     let (profile, saved_pw) = match self.sftp.as_ref() {
                         Some(c) => (c.profile.clone(), c.saved_password.clone()),
-                        None => {
-                            let _ = std::fs::remove_file(&temp_path);
-                            return Ok(());
-                        }
+                        None => return Ok(()),
                     };
                     // Use a fresh session: the existing one may have timed out
                     // while the editor was open (SSH2 error -13).
-                    match upload_file_fresh(&profile, saved_pw.as_deref(), &temp_path, &remote_path) {
+                    match upload_file_fresh(&profile, saved_pw.as_ref().map(|z| z.as_str()), &temp_path, &remote_path) {
                         Ok(()) => {
                             let name = remote_path.file_name()
                                 .map(|n| n.to_string_lossy().to_string())
@@ -1668,7 +1715,7 @@ impl App {
                 } else {
                     self.status_message = Some("Keine Änderungen, kein Upload".to_string());
                 }
-                let _ = std::fs::remove_file(&temp_path);
+                // _temp_dir drops here and auto-deletes the temp directory.
             }
         }
         Ok(())

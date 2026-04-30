@@ -1,10 +1,12 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use ssh2::{FileStat, OpenFlags, OpenType, Session, Sftp};
+use ssh2::{FileStat, KnownHostFileKind, OpenFlags, OpenType, Session, Sftp};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::app::FileEntry;
 use crate::config::profiles::{AuthMethod, Profile};
@@ -22,6 +24,18 @@ pub enum SftpError {
     KeyNotFound(String),
     #[error("Remote path error: {0}")]
     Path(String),
+    #[error("Unknown host key for {host}: {fingerprint}")]
+    UnknownHostKey {
+        host: String,
+        port: u16,
+        fingerprint: String,
+        key_type: String,
+        key_bytes: Vec<u8>,
+    },
+    #[error("Host key mismatch for '{host}' — possible MITM! Remove the old entry from ~/.ssh/known_hosts to proceed.")]
+    HostKeyMismatch { host: String },
+    #[error("Insecure key file permissions for {path}: {mode:04o} (expected 0600 or 0400)")]
+    InsecureKeyPermissions { path: String, mode: u32 },
 }
 
 /// An active SFTP session.
@@ -37,8 +51,8 @@ pub struct SftpConnection {
     pub user: String,
     /// Stored so the upload thread can open a second session.
     pub profile: Profile,
-    /// Stored password (only set for password-auth profiles).
-    pub saved_password: Option<String>,
+    /// Stored password (only set for password-auth profiles). Zeroed on drop.
+    pub saved_password: Option<Zeroizing<String>>,
 }
 
 impl SftpConnection {
@@ -54,6 +68,7 @@ impl SftpConnection {
         session.set_tcp_stream(tcp);
         session.handshake()?;
 
+        verify_host_key(&session, &profile.host, profile.port)?;
         authenticate(&mut session, profile, password)?;
 
         let sftp = session.sftp()?;
@@ -69,7 +84,7 @@ impl SftpConnection {
             host: profile.host.clone(),
             user: profile.user.clone(),
             profile: profile.clone(),
-            saved_password: password.map(|s| s.to_string()),
+            saved_password: password.map(|s| Zeroizing::new(s.to_string())),
         })
     }
 
@@ -105,6 +120,10 @@ impl SftpConnection {
 
     /// Change into a subdirectory and return the new listing.
     pub fn enter_dir(&mut self, name: &str) -> Result<Vec<FileEntry>, SftpError> {
+        // Reject names containing '/' to prevent path-traversal via crafted server responses.
+        if name != ".." && name.contains('/') {
+            return Err(SftpError::Path(format!("Invalid entry name: '{}'", name)));
+        }
         let new_path = if name == ".." {
             self.remote_path
                 .parent()
@@ -265,7 +284,7 @@ impl SftpConnection {
 /// On success the state is set to `Done`; on failure to `Failed`.
 pub fn upload_batch(
     profile: Profile,
-    password: Option<String>,
+    password: Option<Zeroizing<String>>,
     entries: Vec<crate::app::FileEntry>,
     local_dir: PathBuf,
     remote_dir: PathBuf,
@@ -279,7 +298,8 @@ pub fn upload_batch(
         let mut session = Session::new()?;
         session.set_tcp_stream(tcp);
         session.handshake()?;
-        authenticate(&mut session, &profile, password.as_deref())?;
+        verify_host_key(&session, &profile.host, profile.port)?;
+        authenticate(&mut session, &profile, password.as_ref().map(|z| z.as_str()))?;
 
         let sftp = session.sftp()?;
 
@@ -423,7 +443,7 @@ fn upload_dir_recursive(
 /// On success the state is set to `Done`; on failure to `Failed`.
 pub fn download_batch(
     profile: Profile,
-    password: Option<String>,
+    password: Option<Zeroizing<String>>,
     entries: Vec<crate::app::FileEntry>,
     remote_dir: PathBuf,
     local_dir: PathBuf,
@@ -437,7 +457,8 @@ pub fn download_batch(
         let mut session = Session::new()?;
         session.set_tcp_stream(tcp);
         session.handshake()?;
-        authenticate(&mut session, &profile, password.as_deref())?;
+        verify_host_key(&session, &profile.host, profile.port)?;
+        authenticate(&mut session, &profile, password.as_ref().map(|z| z.as_str()))?;
 
         let sftp = session.sftp()?;
 
@@ -678,6 +699,7 @@ pub fn upload_file_fresh(
     let mut session = Session::new()?;
     session.set_tcp_stream(tcp);
     session.handshake()?;
+    verify_host_key(&session, &profile.host, profile.port)?;
     authenticate(&mut session, profile, password)?;
 
     let sftp = session.sftp()?;
@@ -704,6 +726,14 @@ fn authenticate(
                 return Err(SftpError::KeyNotFound(
                     key_path.display().to_string(),
                 ));
+            }
+            let meta = std::fs::metadata(&key_path)?;
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                return Err(SftpError::InsecureKeyPermissions {
+                    path: key_path.display().to_string(),
+                    mode,
+                });
             }
             session
                 .userauth_pubkey_file(&profile.user, None, &key_path, None)
@@ -770,6 +800,94 @@ fn format_permissions(mode: u32) -> String {
         s.push(if mode & bit != 0 { *ch } else { '-' });
     }
     s
+}
+
+/// Check the server's host key against ~/.ssh/known_hosts.
+fn verify_host_key(session: &Session, host: &str, port: u16) -> Result<(), SftpError> {
+    let (key, key_type) = match session.host_key() {
+        Some(pair) => pair,
+        None => return Err(SftpError::HostKeyMismatch { host: host.to_string() }),
+    };
+
+    let fingerprint = session
+        .host_key_hash(ssh2::HashType::Sha256)
+        .map(|h| format!("SHA256:{}", openssl::base64::encode_block(h).trim_end_matches('=')))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let key_type_str = host_key_type_str(key_type, key);
+    let key_bytes = key.to_vec();
+
+    let known_hosts_path = expand_tilde("~/.ssh/known_hosts");
+    let mut known_hosts = session.known_hosts()?;
+    if known_hosts_path.exists() {
+        known_hosts
+            .read_file(&known_hosts_path, KnownHostFileKind::OpenSSH)
+            .map_err(|e| SftpError::Path(format!("known_hosts read error: {}", e)))?;
+    }
+
+    let check_host = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{}]:{}", host, port)
+    };
+
+    match known_hosts.check(&check_host, key) {
+        ssh2::CheckResult::Match => Ok(()),
+        ssh2::CheckResult::NotFound => Err(SftpError::UnknownHostKey {
+            host: host.to_string(),
+            port,
+            fingerprint,
+            key_type: key_type_str,
+            key_bytes,
+        }),
+        _ => Err(SftpError::HostKeyMismatch { host: host.to_string() }),
+    }
+}
+
+/// Append a trusted host key to ~/.ssh/known_hosts.
+pub fn add_to_known_hosts(host: &str, port: u16, key_type: &str, key_bytes: &[u8]) -> Result<(), SftpError> {
+    let known_hosts_path = expand_tilde("~/.ssh/known_hosts");
+    if let Some(parent) = known_hosts_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let hostname = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{}]:{}", host, port)
+    };
+    let key_b64 = openssl::base64::encode_block(key_bytes);
+    let entry = format!("{} {} {}\n", hostname, key_type, key_b64);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&known_hosts_path)?;
+    file.write_all(entry.as_bytes())?;
+    Ok(())
+}
+
+fn host_key_type_str(key_type: ssh2::HostKeyType, key_bytes: &[u8]) -> String {
+    match key_type {
+        ssh2::HostKeyType::Rsa => "ssh-rsa".to_string(),
+        ssh2::HostKeyType::Dss => "ssh-dss".to_string(),
+        ssh2::HostKeyType::Ecdsa256 => "ecdsa-sha2-nistp256".to_string(),
+        ssh2::HostKeyType::Ecdsa384 => "ecdsa-sha2-nistp384".to_string(),
+        ssh2::HostKeyType::Ecdsa521 => "ecdsa-sha2-nistp521".to_string(),
+        ssh2::HostKeyType::Ed25519 => "ssh-ed25519".to_string(),
+        ssh2::HostKeyType::Unknown => {
+            // Extract the type string from the start of the key blob (length-prefixed).
+            if key_bytes.len() >= 4 {
+                let len = u32::from_be_bytes([
+                    key_bytes[0], key_bytes[1], key_bytes[2], key_bytes[3],
+                ]) as usize;
+                if 4 + len <= key_bytes.len() {
+                    if let Ok(s) = std::str::from_utf8(&key_bytes[4..4 + len]) {
+                        return s.to_string();
+                    }
+                }
+            }
+            "unknown".to_string()
+        }
+    }
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
