@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,8 @@ pub enum ConfigError {
     TomlParse(#[from] toml::de::Error),
     #[error("TOML serialize error: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
+    #[error("Unsafe file permissions on {path}: {mode:04o} (expected 0600)")]
+    UnsafePermissions { path: String, mode: u32 },
     #[error("Keyring error: {0}")]
     Keyring(String),
 }
@@ -69,6 +72,16 @@ impl ProfileStore {
         if !path.exists() {
             return Ok(Self::default());
         }
+        // --- permission check ---
+        let meta = fs::metadata(&path)?;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            return Err(ConfigError::UnsafePermissions {
+                path: path.display().to_string(),
+                mode,
+            });
+        }
+        // ------------------------
         let content = fs::read_to_string(&path)?;
         let store = toml::from_str(&content)?;
         Ok(store)
@@ -81,6 +94,8 @@ impl ProfileStore {
         }
         let content = toml::to_string_pretty(self)?;
         fs::write(&path, content)?;
+        // Enforce 0600 — only owner can read/write
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         Ok(())
     }
 

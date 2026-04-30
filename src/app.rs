@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Instant, SystemTime};
@@ -666,6 +668,11 @@ impl ShellDialog {
 /// How often to poll the remote directory for background changes.
 const REMOTE_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
+pub struct PermissionFixDialog {
+    pub path: String,
+    pub mode: u32,
+}
+
 pub struct App {
     pub left: PanelState,
     pub right: PanelState,
@@ -694,6 +701,8 @@ pub struct App {
     pub pending_edit: Option<EditRequest>,
     /// Shell command dialog ('!')
     pub shell_dialog: Option<ShellDialog>,
+    /// Permission fix dialog for profile config
+    pub permission_dialog: Option<PermissionFixDialog>,
     /// When true the panels are rendered swapped: remote on the left, local on the right.
     pub panels_swapped: bool,
     /// Holds the notify watcher alive; dropping it stops the OS watch.
@@ -729,12 +738,20 @@ impl App {
             help_visible: false,
             pending_edit: None,
             shell_dialog: None,
+            permission_dialog: None,
             panels_swapped: false,
             local_watcher: None,
             local_watcher_rx: None,
             local_watched_path: None,
             last_remote_refresh: None,
         };
+        // Check profile config permissions on startup
+        match ProfileStore::load() {
+            Err(ConfigError::UnsafePermissions { path, mode }) => {
+                app.permission_dialog = Some(PermissionFixDialog { path, mode });
+            }
+            _ => {}
+        }
         app.start_local_watcher();
         Ok(app)
     }
@@ -856,6 +873,25 @@ impl App {
 
     pub fn close_profile_dialog(&mut self) {
         self.profile_dialog = None;
+    }
+
+    /// Open the permission fix dialog with path and current mode.
+    #[allow(dead_code)]
+    pub fn open_permission_dialog(&mut self, path: String, mode: u32) {
+        self.permission_dialog = Some(PermissionFixDialog { path, mode });
+    }
+
+    /// Fix permissions on profile config to 0600 and dismiss the dialog.
+    pub fn fix_permission_dialog(&mut self) {
+        if let Some(ref dlg) = self.permission_dialog {
+            let _ = fs::set_permissions(&dlg.path, fs::Permissions::from_mode(0o600));
+        }
+        self.permission_dialog = None;
+    }
+
+    /// Dismiss the permission fix dialog without fixing.
+    pub fn dismiss_permission_dialog(&mut self) {
+        self.permission_dialog = None;
     }
 
     /// Initiate connection with a profile.

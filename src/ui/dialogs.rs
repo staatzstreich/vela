@@ -1,14 +1,14 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::app::{
-    DeleteDialog, MkdirDialog, NewProfileForm, PasswordDialog, ProfileDialog, ProfileDialogMode,
-    RenameDialog, ShellDialog,
+    DeleteDialog, MkdirDialog, NewProfileForm, PasswordDialog, PermissionFixDialog, ProfileDialog,
+    ProfileDialogMode, RenameDialog, ShellDialog,
 };
 use crate::config::profiles::AuthMethod;
 
@@ -867,4 +867,65 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+/// Render the permission fix dialog overlay.
+pub fn render_permission_dialog(frame: &mut Frame, dlg: &PermissionFixDialog) {
+    let message_lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled(
+                "⚠   Warnung: Unsichere Berechtigungen!   ⚠",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Datei: "),
+            Span::styled(&dlg.path, Style::default().fg(Color::Blue)),
+        ]),
+        Line::from(vec![
+            Span::raw("Aktuelle Rechte: "),
+            Span::styled(format!("{:04o}", dlg.mode), Style::default().fg(Color::Red)),
+        ]),
+        Line::from(vec![
+            Span::raw("Erforderlich: "),
+            Span::styled("0600", Style::default().fg(Color::Green)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Andere Benutzer können die Datei "),
+            Span::styled("lesen", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(" oder "),
+            Span::styled("schreiben", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("."),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Drücke "),
+            Span::styled("f", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" um Rechte auf 0600 zu setzen"),
+        ]),
+        Line::from(vec![
+            Span::raw("Drücke "),
+            Span::styled("i", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::raw(" oder "),
+            Span::styled("Esc", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::raw(" um fortzufahren"),
+        ]),
+    ];
+
+    let block = Block::default()
+        .title(" Berechtigungen ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let para = Paragraph::new(Text::from(message_lines))
+        .wrap(Wrap { trim: true })
+        .block(block)
+        .alignment(Alignment::Left);
+
+    let area = centered_rect(60, 50, frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(para, area);
 }

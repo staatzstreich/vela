@@ -163,7 +163,9 @@ fn handle_events(app: &mut App) -> Result<(), AppError> {
         }
 
         // Priority (highest first): password > delete > rename > mkdir > shell > profile > main
-        if app.password_dialog.is_some() {
+        if app.permission_dialog.is_some() {
+            handle_permission_key(app, key.code);
+        } else if app.password_dialog.is_some() {
             handle_password_key(app, key.code);
         } else if app.delete_dialog.is_some() {
             handle_delete_key(app, key.code);
@@ -871,4 +873,16 @@ fn prev_field(current: usize, auth: &AuthMethod, save_pw: bool) -> usize {
         prev = if prev == 0 { FORM_FIELDS - 1 } else { prev - 1 };
     }
     current
+}
+
+// ---------------------------------------------------------------------------
+// Permission fix dialog key handling
+// ---------------------------------------------------------------------------
+
+fn handle_permission_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('f') | KeyCode::Char('F') => app.fix_permission_dialog(),
+        KeyCode::Char('i') | KeyCode::Char('I') | KeyCode::Esc => app.dismiss_permission_dialog(),
+        _ => {}
+    }
 }
