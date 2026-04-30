@@ -51,10 +51,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<(), AppE
         handle_events(&mut app)?;
 
         // F4: if an editor launch was requested, hand off to the editor and
-        // restore the TUI afterwards.  launch_editor() owns the full
-        // suspend/restore cycle via ratatui::restore() / ratatui::init().
+        // restore the TUI afterwards.
         if let Some(req) = app.pending_edit.take() {
-            launch_editor(&req);
+            launch_editor(terminal, &req)?;
             terminal.clear()?;
             app.finish_edit(req)?;
         }
@@ -81,9 +80,10 @@ fn find_editor() -> Option<String> {
     .collect();
 
     for candidate in candidates {
-        // `which` exits 0 when the binary is found on PATH.
+        // Extract first token (binary name); don't pass flags to `which`.
+        let binary = candidate.split_whitespace().next().unwrap_or(&candidate);
         let found = std::process::Command::new("which")
-            .arg(&candidate)
+            .arg(binary)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
@@ -95,24 +95,40 @@ fn find_editor() -> Option<String> {
 }
 
 /// Suspend the TUI, launch the editor for `req`, then restore the TUI.
-/// Uses `ratatui::restore()` / `ratatui::init()` for clean terminal handover.
-/// Ignores the editor exit code — mtime comparison determines whether a file
-/// was saved.
-fn launch_editor(req: &EditRequest) {
+/// Hands the terminal back to the shell cleanly and restores raw mode
+/// afterwards.  Ignores the editor exit code — mtime comparison determines
+/// whether a file was saved.
+fn launch_editor(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    req: &EditRequest,
+) -> Result<(), AppError> {
     let path = match req {
         EditRequest::Local  { path }            => path,
         EditRequest::Remote { temp_path, .. }   => temp_path,
     };
     match find_editor() {
         Some(editor) => {
-            ratatui::restore();
-            let _ = std::process::Command::new(&editor).arg(path).status();
-            ratatui::init();
+            // Leave alternate screen and disable raw mode so the editor runs cleanly
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+            let parts: Vec<&str> = editor.split_whitespace().collect();
+            let mut cmd = std::process::Command::new(parts[0]);
+            for arg in &parts[1..] {
+                cmd.arg(arg);
+            }
+            let _ = cmd.arg(path).status();
+
+            // Re-enter alternate screen and raw mode
+            enable_raw_mode()?;
+            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            terminal.clear()?;
         }
         None => {
             // No editor found — nothing to do; finish_edit will see no mtime change.
         }
     }
+    Ok(())
 }
 
 fn handle_events(app: &mut App) -> Result<(), AppError> {
