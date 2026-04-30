@@ -1651,6 +1651,46 @@ impl App {
         self.shell_dialog = Some(ShellDialog::new());
     }
 
+    /// Open a shell dialog showing the last 50 lines of the selected remote file.
+    /// Uses the existing authenticated SFTP connection — no password prompt.
+    pub fn open_tail_dialog(&mut self) {
+        if self.active != ActivePanel::Right {
+            self.status_message = Some("Tail nur für Remote-Dateien (rechtes Panel)".to_string());
+            return;
+        }
+        let conn = match self.sftp.as_ref() {
+            Some(c) => c,
+            None => {
+                self.status_message = Some("Nicht verbunden".to_string());
+                return;
+            }
+        };
+        let entry = match self.right.entries.get(self.right.selected) {
+            Some(e) if !e.is_dir && e.name != ".." => e,
+            _ => {
+                self.status_message = Some("Keine Datei ausgewählt".to_string());
+                return;
+            }
+        };
+        let remote_path = conn.remote_path.join(&entry.name);
+        match conn.tail_remote_file(&remote_path, 50) {
+            Ok(lines) => {
+                let mut dlg = ShellDialog::new();
+                dlg.output = Some(lines);
+                dlg.exit_code = Some(0);
+                self.shell_dialog = Some(dlg);
+                self.status_message = Some(format!("Tail – {}", entry.name));
+            }
+            Err(e) => {
+                let mut dlg = ShellDialog::new();
+                dlg.output = Some(vec![format!("Fehler: {}", e)]);
+                dlg.exit_code = Some(1);
+                self.shell_dialog = Some(dlg);
+                self.status_message = Some("Tail fehlgeschlagen".to_string());
+            }
+        }
+    }
+
     /// Execute the command currently typed in the shell dialog.
     /// Captures stdout+stderr and switches the dialog to output phase.
     pub fn run_shell_command(&mut self) {

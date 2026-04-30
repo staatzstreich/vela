@@ -250,6 +250,7 @@ fn handle_main_key(app: &mut App, code: KeyCode) -> Result<(), AppError> {
 
         // ! = shell command dialog
         KeyCode::Char('!') => app.open_shell_dialog(),
+        KeyCode::Char('t') => app.open_tail_dialog(),
 
         // F9 / p = profile manager
         KeyCode::F(9) | KeyCode::Char('p') => app.open_profile_dialog(),

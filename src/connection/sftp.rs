@@ -220,7 +220,39 @@ impl SftpConnection {
         }
         self.sftp
             .rmdir(path)
-            .map_err(|e| SftpError::Path(e.to_string()))
+            .map_err(|e| SftpError::Path(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Read a remote text file over the existing SFTP connection and return the
+    /// last `max_lines` lines as a Vec of strings.
+    pub fn tail_remote_file(
+        &self,
+        remote_path: &std::path::Path,
+        max_lines: usize,
+    ) -> Result<Vec<String>, SftpError> {
+        let mut remote_file = self
+            .sftp
+            .open(remote_path)
+            .map_err(|e| SftpError::Path(e.to_string()))?;
+
+        let mut buf = Vec::new();
+        remote_file
+            .read_to_end(&mut buf)
+            .map_err(|e| SftpError::Path(e.to_string()))?;
+
+        let text = String::from_utf8_lossy(&buf);
+        let lines: Vec<String> = text
+            .lines()
+            .rev()
+            .take(max_lines)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|l| l.to_string())
+            .collect();
+
+        Ok(lines)
     }
 }
 
