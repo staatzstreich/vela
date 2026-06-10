@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
@@ -11,22 +11,23 @@ use crate::app::{
     ProfileDialog, ProfileDialogMode, RenameDialog, ShellDialog,
 };
 use crate::config::profiles::AuthMethod;
+use crate::ui::theme::Theme;
 
 /// Render the profile manager dialog centered on the screen.
-pub fn render_profile_dialog(frame: &mut Frame, dialog: &ProfileDialog) {
+pub fn render_profile_dialog(frame: &mut Frame, dialog: &ProfileDialog, theme: &Theme) {
     let area = centered_rect(70, 80, frame.area());
     frame.render_widget(Clear, area);
 
     match &dialog.mode {
-        ProfileDialogMode::List => render_list(frame, dialog, area),
+        ProfileDialogMode::List => render_list(frame, dialog, area, theme),
         ProfileDialogMode::New { field } => {
-            render_profile_form(frame, &dialog.form, *field, area, " Neues Profil ")
+            render_profile_form(frame, &dialog.form, *field, area, " Neues Profil ", theme)
         }
         ProfileDialogMode::Edit { field, .. } => {
-            render_profile_form(frame, &dialog.form, *field, area, " Profil bearbeiten ")
+            render_profile_form(frame, &dialog.form, *field, area, " Profil bearbeiten ", theme)
         }
         ProfileDialogMode::ConfirmDelete { index } => {
-            render_confirm_delete(frame, dialog, *index, area)
+            render_confirm_delete(frame, dialog, *index, area, theme)
         }
     }
 }
@@ -35,11 +36,11 @@ pub fn render_profile_dialog(frame: &mut Frame, dialog: &ProfileDialog) {
 // List view
 // ---------------------------------------------------------------------------
 
-fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect) {
+fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect, theme: &Theme) {
     let block = Block::default()
         .title(" Verbindungsprofile (F9) ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme.dialog_active_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -56,7 +57,7 @@ fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect) {
     let items: Vec<ListItem> = if dialog.store.profiles.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
             "  Keine Profile vorhanden. N = Neu anlegen",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_muted),
         )))]
     } else {
         dialog
@@ -71,18 +72,18 @@ fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect) {
                     "  "
                 };
                 let line = Line::from(vec![
-                    Span::styled(active_marker, Style::default().fg(Color::Green)),
+                    Span::styled(active_marker, Style::default().fg(theme.profile_active)),
                     Span::styled(
                         format!("{:<20}", p.name),
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("  {}@{}:{}", p.user, p.host, p.port),
-                        Style::default().fg(Color::Gray),
+                        Style::default().fg(theme.text_secondary),
                     ),
                     Span::styled(
                         format!("  [{}]", p.auth.as_str()),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_muted),
                     ),
                 ]);
                 ListItem::new(line)
@@ -96,18 +97,18 @@ fn render_list(frame: &mut Frame, dialog: &ProfileDialog, area: Rect) {
     }
 
     let list = List::new(items)
-        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
+        .highlight_style(Style::default().bg(theme.highlight_primary_bg).fg(theme.highlight_primary_fg))
         .highlight_symbol("► ");
 
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
     // Hint bar
     let hints = Line::from(vec![
-        hint_key("Enter"), hint_label(" Auswählen  "),
-        hint_key("N"), hint_label(" Neu  "),
-        hint_key("E / F2"), hint_label(" Bearbeiten  "),
-        hint_key("D"), hint_label(" Löschen  "),
-        hint_key("Esc"), hint_label(" Schließen"),
+        hint_key("Enter", theme), hint_label(" Auswählen  ", theme),
+        hint_key("N", theme), hint_label(" Neu  ", theme),
+        hint_key("E / F2", theme), hint_label(" Bearbeiten  ", theme),
+        hint_key("D", theme), hint_label(" Löschen  ", theme),
+        hint_key("Esc", theme), hint_label(" Schließen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
@@ -143,11 +144,12 @@ fn render_profile_form(
     active_field: usize,
     area: Rect,
     title: &str,
+    theme: &Theme,
 ) {
     let block = Block::default()
         .title(title.to_string())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme.dialog_warning_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -167,15 +169,15 @@ fn render_profile_form(
     for (row_idx, &(field_idx, label)) in vis.iter().enumerate() {
         let is_active = field_idx == active_field;
         let border_style = if is_active {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(theme.dialog_active_border)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.dialog_inactive_border)
         };
 
         match field_idx {
-            4 => render_auth_toggle(frame, form, is_active, border_style, label, rows[row_idx]),
-            8 => render_save_pw_toggle(frame, form, is_active, border_style, label, rows[row_idx]),
-            9 => render_password_field(frame, form, is_active, border_style, rows[row_idx]),
+            4 => render_auth_toggle(frame, form, is_active, border_style, label, rows[row_idx], theme),
+            8 => render_save_pw_toggle(frame, form, is_active, border_style, label, rows[row_idx], theme),
+            9 => render_password_field(frame, form, is_active, border_style, rows[row_idx], theme),
             _ => {
                 let value = match field_idx {
                     0 => &form.name,
@@ -188,9 +190,9 @@ fn render_profile_form(
                     _ => "",
                 };
                 let value_style = if is_active {
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.text_active).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(theme.text_inactive)
                 };
                 let cursor = if is_active { "█" } else { "" };
                 let field_title = if field_idx == 6 || field_idx == 7 {
@@ -204,7 +206,7 @@ fn render_profile_form(
                     .border_style(border_style);
                 let content = Line::from(vec![
                     Span::styled(value, value_style),
-                    Span::styled(cursor, Style::default().fg(Color::Cyan)),
+                    Span::styled(cursor, Style::default().fg(theme.cursor_bg)),
                 ]);
                 frame.render_widget(
                     Paragraph::new(content).block(field_block),
@@ -216,9 +218,9 @@ fn render_profile_form(
 
     // Hint bar at bottom
     let hints = Line::from(vec![
-        hint_key("Tab"), hint_label(" Nächstes Feld  "),
-        hint_key("Enter"), hint_label(" Speichern  "),
-        hint_key("Esc"), hint_label(" Abbrechen"),
+        hint_key("Tab", theme), hint_label(" Nächstes Feld  ", theme),
+        hint_key("Enter", theme), hint_label(" Speichern  ", theme),
+        hint_key("Esc", theme), hint_label(" Abbrechen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), *rows.last().unwrap());
 }
@@ -227,16 +229,17 @@ fn render_profile_form(
 fn render_auth_toggle(
     frame: &mut Frame, form: &NewProfileForm,
     is_active: bool, border_style: Style, label: &str, area: Rect,
+    theme: &Theme,
 ) {
     let (key_style, pw_style) = if form.auth == AuthMethod::Key {
         (
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.toggle_on).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.toggle_off),
         )
     } else {
         (
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.toggle_off),
+            Style::default().fg(theme.toggle_on).add_modifier(Modifier::BOLD),
         )
     };
     let hint = if is_active { "  [Space]" } else { "" };
@@ -248,7 +251,7 @@ fn render_auth_toggle(
         Span::styled("● key", key_style),
         Span::raw("   "),
         Span::styled("● password", pw_style),
-        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        Span::styled(hint, Style::default().fg(theme.text_muted)),
     ]);
     frame.render_widget(Paragraph::new(auth_line).block(field_block), area);
 }
@@ -257,16 +260,17 @@ fn render_auth_toggle(
 fn render_save_pw_toggle(
     frame: &mut Frame, form: &NewProfileForm,
     is_active: bool, border_style: Style, label: &str, area: Rect,
+    theme: &Theme,
 ) {
     let (ja_style, nein_style) = if form.save_password {
         (
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.toggle_on).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.toggle_off),
         )
     } else {
         (
-            Style::default().fg(Color::DarkGray),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.toggle_off),
+            Style::default().fg(theme.toggle_on).add_modifier(Modifier::BOLD),
         )
     };
     let hint = if is_active { "  [Space]" } else { "" };
@@ -278,7 +282,7 @@ fn render_save_pw_toggle(
         Span::styled("● Ja", ja_style),
         Span::raw("   "),
         Span::styled("● Nein", nein_style),
-        Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        Span::styled(hint, Style::default().fg(theme.text_muted)),
     ]);
     frame.render_widget(Paragraph::new(toggle_line).block(field_block), area);
 }
@@ -287,12 +291,13 @@ fn render_save_pw_toggle(
 fn render_password_field(
     frame: &mut Frame, form: &NewProfileForm,
     is_active: bool, border_style: Style, area: Rect,
+    theme: &Theme,
 ) {
     let masked: String = "●".repeat(form.password.len());
     let value_style = if is_active {
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.text_active).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(theme.text_inactive)
     };
     let cursor = if is_active { "█" } else { "" };
     let field_block = Block::default()
@@ -301,7 +306,7 @@ fn render_password_field(
         .border_style(border_style);
     let content = Line::from(vec![
         Span::styled(masked, value_style),
-        Span::styled(cursor, Style::default().fg(Color::Cyan)),
+        Span::styled(cursor, Style::default().fg(theme.cursor_bg)),
     ]);
     frame.render_widget(Paragraph::new(content).block(field_block), area);
 }
@@ -315,6 +320,7 @@ fn render_confirm_delete(
     dialog: &ProfileDialog,
     index: usize,
     area: Rect,
+    theme: &Theme,
 ) {
     let confirm_area = centered_rect(50, 30, area);
     frame.render_widget(Clear, confirm_area);
@@ -329,7 +335,7 @@ fn render_confirm_delete(
     let block = Block::default()
         .title(" Profil löschen? ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
+        .border_style(Style::default().fg(theme.dialog_error_border));
 
     let inner = block.inner(confirm_area);
     frame.render_widget(block, confirm_area);
@@ -343,15 +349,15 @@ fn render_confirm_delete(
         Span::raw("Profil \""),
         Span::styled(
             name.to_string(),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text_warning).add_modifier(Modifier::BOLD),
         ),
         Span::raw("\" wirklich löschen?"),
     ]));
     frame.render_widget(msg, chunks[0]);
 
     let hints = Line::from(vec![
-        hint_key("Enter / Y"), hint_label(" Ja  "),
-        hint_key("Esc / N"), hint_label(" Nein"),
+        hint_key("Enter / Y", theme), hint_label(" Ja  ", theme),
+        hint_key("Esc / N", theme), hint_label(" Nein", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
@@ -360,24 +366,24 @@ fn render_confirm_delete(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn hint_key(k: &str) -> Span<'static> {
+fn hint_key(k: &str, theme: &Theme) -> Span<'static> {
     Span::styled(
         format!(" {} ", k),
         Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::White)
+            .bg(theme.badge_bg)
+            .fg(theme.badge_fg)
             .add_modifier(Modifier::BOLD),
     )
 }
 
-fn hint_label(l: &str) -> Span<'static> {
-    Span::styled(l.to_string(), Style::default().fg(Color::Gray))
+fn hint_label(l: &str, theme: &Theme) -> Span<'static> {
+    Span::styled(l.to_string(), Style::default().fg(theme.text_secondary))
 }
 
 /// Build a `Line` that shows the text with a block-cursor at `cursor_pos`.
-/// Text before the cursor is white, the cursor character (or a space if at
-/// end) is shown with inverted Cyan colours, text after is white again.
-fn cursor_line<'a>(input: &'a str, cursor_pos: usize) -> Line<'a> {
+/// Text before the cursor is primary, the cursor character (or a space if at
+/// end) is shown with inverted cursor colours, text after is primary again.
+fn cursor_line<'a>(input: &'a str, cursor_pos: usize, theme: &Theme) -> Line<'a> {
     let before = &input[..cursor_pos];
 
     // Find the end of the character sitting under the cursor (if any).
@@ -400,21 +406,21 @@ fn cursor_line<'a>(input: &'a str, cursor_pos: usize) -> Line<'a> {
 
     let cursor_span = if under.is_empty() {
         // Cursor is past the last character — show an empty block
-        Span::styled(" ", Style::default().bg(Color::Cyan).fg(Color::Black))
+        Span::styled(" ", Style::default().bg(theme.cursor_bg).fg(theme.cursor_fg))
     } else {
         Span::styled(
             under.to_string(),
             Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
+                .bg(theme.cursor_bg)
+                .fg(theme.cursor_fg)
                 .add_modifier(Modifier::BOLD),
         )
     };
 
     Line::from(vec![
-        Span::styled(before.to_string(), Style::default().fg(Color::White)),
+        Span::styled(before.to_string(), Style::default().fg(theme.text_primary)),
         cursor_span,
-        Span::styled(after.to_string(), Style::default().fg(Color::White)),
+        Span::styled(after.to_string(), Style::default().fg(theme.text_primary)),
     ])
 }
 
@@ -423,7 +429,7 @@ fn cursor_line<'a>(input: &'a str, cursor_pos: usize) -> Line<'a> {
 // ---------------------------------------------------------------------------
 
 /// Render the password prompt overlay.
-pub fn render_password_dialog(frame: &mut Frame, dlg: &PasswordDialog) {
+pub fn render_password_dialog(frame: &mut Frame, dlg: &PasswordDialog, theme: &Theme) {
     let area = centered_rect(50, 40, frame.area());
     frame.render_widget(Clear, area);
 
@@ -432,9 +438,9 @@ pub fn render_password_dialog(frame: &mut Frame, dlg: &PasswordDialog) {
         dlg.profile.user, dlg.profile.host
     );
     let border_style = if dlg.error.is_some() {
-        Style::default().fg(Color::Red)
+        Style::default().fg(theme.dialog_error_border)
     } else {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(theme.dialog_warning_border)
     };
 
     let block = Block::default()
@@ -461,10 +467,10 @@ pub fn render_password_dialog(frame: &mut Frame, dlg: &PasswordDialog) {
     let input_block = Block::default()
         .title(" Passwort ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme.dialog_active_border));
     let input_line = Line::from(vec![
-        Span::styled(masked, Style::default().fg(Color::White)),
-        Span::styled(cursor, Style::default().fg(Color::Cyan)),
+        Span::styled(masked, Style::default().fg(theme.text_primary)),
+        Span::styled(cursor, Style::default().fg(theme.cursor_bg)),
     ]);
     frame.render_widget(Paragraph::new(input_line).block(input_block), chunks[0]);
 
@@ -472,15 +478,15 @@ pub fn render_password_dialog(frame: &mut Frame, dlg: &PasswordDialog) {
     if let Some(ref err) = dlg.error {
         let err_line = Line::from(Span::styled(
             format!("✗ {}", err),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.text_danger),
         ));
         frame.render_widget(Paragraph::new(err_line), chunks[1]);
     }
 
     // Hints
     let hints = Line::from(vec![
-        hint_key("Enter"), hint_label(" Verbinden  "),
-        hint_key("Esc"), hint_label(" Abbrechen"),
+        hint_key("Enter", theme), hint_label(" Verbinden  ", theme),
+        hint_key("Esc", theme), hint_label(" Abbrechen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[3]);
 }
@@ -490,14 +496,14 @@ pub fn render_password_dialog(frame: &mut Frame, dlg: &PasswordDialog) {
 // ---------------------------------------------------------------------------
 
 /// Render the rename input dialog.
-pub fn render_rename_dialog(frame: &mut Frame, dlg: &RenameDialog) {
+pub fn render_rename_dialog(frame: &mut Frame, dlg: &RenameDialog, theme: &Theme) {
     let area = centered_rect(50, 30, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .title(" Umbenennen ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme.dialog_warning_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -514,13 +520,13 @@ pub fn render_rename_dialog(frame: &mut Frame, dlg: &RenameDialog) {
     let input_block = Block::default()
         .title(format!(" {} ", dlg.original))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let input_line = cursor_line(&dlg.input, dlg.cursor_pos);
+        .border_style(Style::default().fg(theme.dialog_active_border));
+    let input_line = cursor_line(&dlg.input, dlg.cursor_pos, theme);
     frame.render_widget(Paragraph::new(input_line).block(input_block), chunks[0]);
 
     let hints = Line::from(vec![
-        hint_key("Enter"), hint_label(" OK  "),
-        hint_key("Esc"), hint_label(" Abbrechen"),
+        hint_key("Enter", theme), hint_label(" OK  ", theme),
+        hint_key("Esc", theme), hint_label(" Abbrechen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
@@ -530,14 +536,14 @@ pub fn render_rename_dialog(frame: &mut Frame, dlg: &RenameDialog) {
 // ---------------------------------------------------------------------------
 
 /// Render the mkdir input dialog.
-pub fn render_mkdir_dialog(frame: &mut Frame, dlg: &MkdirDialog) {
+pub fn render_mkdir_dialog(frame: &mut Frame, dlg: &MkdirDialog, theme: &Theme) {
     let area = centered_rect(50, 30, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .title(" Verzeichnis erstellen ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme.dialog_warning_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -554,13 +560,13 @@ pub fn render_mkdir_dialog(frame: &mut Frame, dlg: &MkdirDialog) {
     let input_block = Block::default()
         .title(" Name ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    let input_line = cursor_line(&dlg.input, dlg.cursor_pos);
+        .border_style(Style::default().fg(theme.dialog_active_border));
+    let input_line = cursor_line(&dlg.input, dlg.cursor_pos, theme);
     frame.render_widget(Paragraph::new(input_line).block(input_block), chunks[0]);
 
     let hints = Line::from(vec![
-        hint_key("Enter"), hint_label(" Erstellen  "),
-        hint_key("Esc"), hint_label(" Abbrechen"),
+        hint_key("Enter", theme), hint_label(" Erstellen  ", theme),
+        hint_key("Esc", theme), hint_label(" Abbrechen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
@@ -571,7 +577,7 @@ pub fn render_mkdir_dialog(frame: &mut Frame, dlg: &MkdirDialog) {
 
 /// Render the delete confirmation dialog.
 /// Shows a single entry name or a summary for multiple entries.
-pub fn render_delete_dialog(frame: &mut Frame, dlg: &DeleteDialog) {
+pub fn render_delete_dialog(frame: &mut Frame, dlg: &DeleteDialog, theme: &Theme) {
     let n = dlg.entries.len();
 
     // Height: 1 line per entry (max 6 shown) + 2 for padding/title + 1 hint
@@ -595,7 +601,7 @@ pub fn render_delete_dialog(frame: &mut Frame, dlg: &DeleteDialog) {
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
+        .border_style(Style::default().fg(theme.dialog_error_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -616,13 +622,13 @@ pub fn render_delete_dialog(frame: &mut Frame, dlg: &DeleteDialog) {
         .map(|(name, is_dir)| {
             let icon = if *is_dir { "▶ " } else { "  " };
             let icon_style = if *is_dir {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default().fg(theme.directory_icon).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.file_name)
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {}", icon), icon_style),
-                Span::styled(name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(name.clone(), Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
             ]))
         })
         .collect();
@@ -630,15 +636,15 @@ pub fn render_delete_dialog(frame: &mut Frame, dlg: &DeleteDialog) {
     if n > 6 {
         items.push(ListItem::new(Line::from(Span::styled(
             format!("  … und {} weitere", n - 6),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_muted),
         ))));
     }
 
     frame.render_widget(List::new(items), chunks[0]);
 
     let hints = Line::from(vec![
-        hint_key("Y/Enter"), hint_label(" Löschen  "),
-        hint_key("N/Esc"), hint_label(" Abbrechen"),
+        hint_key("Y/Enter", theme), hint_label(" Löschen  ", theme),
+        hint_key("N/Esc", theme), hint_label(" Abbrechen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
@@ -656,6 +662,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Backspace",      "Übergeordnetes Verzeichnis"),
     ("Tab",            "Panel wechseln (lokal ↔ remote)"),
     ("Ctrl+U / Ctrl+S","Panels tauschen (lokal ↔ remote, nur visuell)"),
+    ("Ctrl+T",          "Theme umschalten (Auto/Dark/Light)"),
     // Selection
     ("Leertaste",      "Datei/Verzeichnis markieren"),
     ("*",              "Alle markieren / alle abwählen"),
@@ -676,14 +683,14 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("F10  /  q",      "Beenden"),
 ];
 
-pub fn render_help_dialog(frame: &mut Frame) {
+pub fn render_help_dialog(frame: &mut Frame, theme: &Theme) {
     let area = centered_rect(60, 85, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .title(" Tastaturkürzel — F1 / Esc zum Schließen ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme.dialog_active_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -703,12 +710,12 @@ pub fn render_help_dialog(frame: &mut Frame) {
                 Span::styled(
                     format!(" {:<width$}", key, width = key_col_w),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.dialog_active_border)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!(" {}", desc),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme.text_primary),
                 ),
             ]);
             ListItem::new(line)
@@ -719,8 +726,8 @@ pub fn render_help_dialog(frame: &mut Frame) {
     frame.render_widget(list, chunks[0]);
 
     let close_hint = Line::from(vec![
-        hint_key("F1"), hint_label(" / "),
-        hint_key("Esc"), hint_label(" Schließen"),
+        hint_key("F1", theme), hint_label(" / ", theme),
+        hint_key("Esc", theme), hint_label(" Schließen", theme),
     ]);
     frame.render_widget(Paragraph::new(close_hint), chunks[1]);
 }
@@ -729,15 +736,15 @@ pub fn render_help_dialog(frame: &mut Frame) {
 // Shell command dialog ('!')
 // ---------------------------------------------------------------------------
 
-pub fn render_shell_dialog(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Path) {
+pub fn render_shell_dialog(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Path, theme: &Theme) {
     if dlg.output.is_none() {
-        render_shell_input(frame, dlg, cwd);
+        render_shell_input(frame, dlg, cwd, theme);
     } else {
-        render_shell_output(frame, dlg);
+        render_shell_output(frame, dlg, theme);
     }
 }
 
-fn render_shell_input(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Path) {
+fn render_shell_input(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Path, theme: &Theme) {
     let area = centered_rect(70, 25, frame.area());
     frame.render_widget(Clear, area);
 
@@ -746,7 +753,7 @@ fn render_shell_input(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Pat
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme.dialog_warning_border));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -764,7 +771,7 @@ fn render_shell_input(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Pat
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             " Befehl:",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.shell_label).add_modifier(Modifier::BOLD),
         ))),
         chunks[0],
     );
@@ -784,23 +791,23 @@ fn render_shell_input(frame: &mut Frame, dlg: &ShellDialog, cwd: &std::path::Pat
     };
     let input_line = Line::from(vec![
         Span::styled(" ", Style::default()),
-        Span::styled(before, Style::default().fg(Color::White)),
+        Span::styled(before, Style::default().fg(theme.text_primary)),
         Span::styled(
             cursor_char,
-            Style::default().bg(Color::White).fg(Color::Black),
+            Style::default().bg(theme.shell_cursor_bg).fg(theme.shell_cursor_fg),
         ),
-        Span::styled(after, Style::default().fg(Color::White)),
+        Span::styled(after, Style::default().fg(theme.text_primary)),
     ]);
     frame.render_widget(Paragraph::new(input_line), chunks[1]);
 
     let hints = Line::from(vec![
-        hint_key("Enter"), hint_label(" Ausführen  "),
-        hint_key("Esc"), hint_label(" Abbrechen"),
+        hint_key("Enter", theme), hint_label(" Ausführen  ", theme),
+        hint_key("Esc", theme), hint_label(" Abbrechen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[3]);
 }
 
-fn render_shell_output(frame: &mut Frame, dlg: &ShellDialog) {
+fn render_shell_output(frame: &mut Frame, dlg: &ShellDialog, theme: &Theme) {
     let area = centered_rect(85, 75, frame.area());
     frame.render_widget(Clear, area);
 
@@ -809,9 +816,9 @@ fn render_shell_output(frame: &mut Frame, dlg: &ShellDialog) {
         .unwrap_or_else(|| "?".to_string());
     let title = format!(" Ausgabe  Exit: {}  ", code_str);
     let exit_color = match dlg.exit_code {
-        Some(0) => Color::Green,
-        Some(_) => Color::Red,
-        None    => Color::Yellow,
+        Some(0) => theme.dialog_success_border,
+        Some(_) => theme.dialog_error_border,
+        None    => theme.dialog_warning_border,
     };
     let block = Block::default()
         .title(title)
@@ -832,18 +839,18 @@ fn render_shell_output(frame: &mut Frame, dlg: &ShellDialog) {
         .as_deref()
         .unwrap_or(&[])
         .iter()
-        .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(Color::White))))
+        .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(theme.text_primary))))
         .collect();
 
     let output_para = Paragraph::new(lines)
-        .style(Style::default().bg(Color::Black))
+        .style(Style::default().bg(theme.shell_output_bg))
         .scroll((dlg.scroll as u16, 0));
     frame.render_widget(output_para, chunks[0]);
 
     let hints = Line::from(vec![
-        hint_key("↑↓"), hint_label(" Scrollen  "),
-        hint_key("PgUp/PgDn"), hint_label(" Seite  "),
-        hint_key("Esc"), hint_label(" Schließen"),
+        hint_key("↑↓", theme), hint_label(" Scrollen  ", theme),
+        hint_key("PgUp/PgDn", theme), hint_label(" Seite  ", theme),
+        hint_key("Esc", theme), hint_label(" Schließen", theme),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
@@ -870,46 +877,46 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 /// Render the permission fix dialog overlay.
-pub fn render_permission_dialog(frame: &mut Frame, dlg: &PermissionFixDialog) {
+pub fn render_permission_dialog(frame: &mut Frame, dlg: &PermissionFixDialog, theme: &Theme) {
     let message_lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled(
                 "⚠   Warnung: Unsichere Berechtigungen!   ⚠",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text_warning).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::raw("Datei: "),
-            Span::styled(&dlg.path, Style::default().fg(Color::Blue)),
+            Span::styled(&dlg.path, Style::default().fg(theme.text_info)),
         ]),
         Line::from(vec![
             Span::raw("Aktuelle Rechte: "),
-            Span::styled(format!("{:04o}", dlg.mode), Style::default().fg(Color::Red)),
+            Span::styled(format!("{:04o}", dlg.mode), Style::default().fg(theme.text_danger)),
         ]),
         Line::from(vec![
             Span::raw("Erforderlich: "),
-            Span::styled("0600", Style::default().fg(Color::Green)),
+            Span::styled("0600", Style::default().fg(theme.text_success)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::raw("Andere Benutzer können die Datei "),
-            Span::styled("lesen", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled("lesen", Style::default().fg(theme.text_danger).add_modifier(Modifier::BOLD)),
             Span::raw(" oder "),
-            Span::styled("schreiben", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled("schreiben", Style::default().fg(theme.text_danger).add_modifier(Modifier::BOLD)),
             Span::raw("."),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::raw("Drücke "),
-            Span::styled("f", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("f", Style::default().fg(theme.text_success).add_modifier(Modifier::BOLD)),
             Span::raw(" um Rechte auf 0600 zu setzen"),
         ]),
         Line::from(vec![
             Span::raw("Drücke "),
-            Span::styled("i", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled("i", Style::default().fg(theme.text_info).add_modifier(Modifier::BOLD)),
             Span::raw(" oder "),
-            Span::styled("Esc", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled("Esc", Style::default().fg(theme.text_info).add_modifier(Modifier::BOLD)),
             Span::raw(" um fortzufahren"),
         ]),
     ];
@@ -918,7 +925,7 @@ pub fn render_permission_dialog(frame: &mut Frame, dlg: &PermissionFixDialog) {
         .title(" Berechtigungen ")
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme.dialog_warning_border));
 
     let para = Paragraph::new(Text::from(message_lines))
         .wrap(Wrap { trim: true })
@@ -934,12 +941,12 @@ pub fn render_permission_dialog(frame: &mut Frame, dlg: &PermissionFixDialog) {
 // Unknown host key dialog
 // ---------------------------------------------------------------------------
 
-pub fn render_host_key_dialog(frame: &mut Frame, dlg: &HostKeyDialog) {
+pub fn render_host_key_dialog(frame: &mut Frame, dlg: &HostKeyDialog, theme: &Theme) {
     let message_lines: Vec<Line> = vec![
         Line::from(vec![
             Span::styled(
                 "⚠   Unbekannter Host-Key!   ⚠",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text_warning).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(""),
@@ -947,21 +954,21 @@ pub fn render_host_key_dialog(frame: &mut Frame, dlg: &HostKeyDialog) {
             Span::raw("Host:        "),
             Span::styled(
                 format!("{}:{}", dlg.host, dlg.port),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.dialog_active_border),
             ),
         ]),
         Line::from(vec![
             Span::raw("Key-Typ:     "),
-            Span::styled(&dlg.key_type, Style::default().fg(Color::Gray)),
+            Span::styled(&dlg.key_type, Style::default().fg(theme.text_secondary)),
         ]),
         Line::from(vec![
             Span::raw("Fingerprint: "),
-            Span::styled(&dlg.fingerprint, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(&dlg.fingerprint, Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::raw("Dieser Host ist "),
-            Span::styled("nicht", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled("nicht", Style::default().fg(theme.text_danger).add_modifier(Modifier::BOLD)),
             Span::raw(" in ~/.ssh/known_hosts vorhanden."),
         ]),
         Line::from(vec![
@@ -969,11 +976,11 @@ pub fn render_host_key_dialog(frame: &mut Frame, dlg: &HostKeyDialog) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Y / Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("Y / Enter", Style::default().fg(theme.text_success).add_modifier(Modifier::BOLD)),
             Span::raw(" — Vertrauen und zu known_hosts hinzufügen"),
         ]),
         Line::from(vec![
-            Span::styled("N / Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled("N / Esc", Style::default().fg(theme.text_danger).add_modifier(Modifier::BOLD)),
             Span::raw("   — Verbindung abbrechen"),
         ]),
     ];
@@ -982,7 +989,7 @@ pub fn render_host_key_dialog(frame: &mut Frame, dlg: &HostKeyDialog) {
         .title(" Unbekannter Host-Key ")
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(theme.dialog_warning_border));
 
     let para = Paragraph::new(Text::from(message_lines))
         .wrap(Wrap { trim: false })

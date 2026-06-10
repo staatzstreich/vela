@@ -17,6 +17,7 @@ use crate::connection::sftp::{
 use crate::transfer::queue::{
     ProgressHandle, TransferHandle, TransferProgress, TransferState, UploadProgress, UploadState,
 };
+use crate::ui::theme::{load_theme_choice, ThemeChoice};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -719,6 +720,8 @@ pub struct App {
     pub host_key_dialog: Option<HostKeyDialog>,
     /// When true the panels are rendered swapped: remote on the left, local on the right.
     pub panels_swapped: bool,
+    /// Dark / Light / Auto theme selection.
+    pub theme_choice: ThemeChoice,
     /// Holds the notify watcher alive; dropping it stops the OS watch.
     local_watcher: Option<RecommendedWatcher>,
     /// Receive side of the notify event channel.
@@ -755,6 +758,7 @@ impl App {
             permission_dialog: None,
             host_key_dialog: None,
             panels_swapped: false,
+            theme_choice: load_theme_choice(),
             local_watcher: None,
             local_watcher_rx: None,
             local_watched_path: None,

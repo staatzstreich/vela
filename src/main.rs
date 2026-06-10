@@ -15,6 +15,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use app::{ActivePanel, App, AppError, EditRequest, ProfileDialogMode};
 use config::profiles::AuthMethod;
+use ui::theme::save_theme_choice;
 
 fn main() -> Result<(), AppError> {
     let mut terminal = setup_terminal()?;
@@ -162,6 +163,14 @@ fn handle_events(app: &mut App) -> Result<(), AppError> {
             && matches!(key.code, KeyCode::Char('u') | KeyCode::Char('s'))
         {
             app.swap_panels();
+            return Ok(());
+        }
+
+        // Ctrl+T — cycle theme: Auto → Dark → Light → Auto
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+            app.theme_choice = app.theme_choice.next();
+            save_theme_choice(app.theme_choice);
+            app.status_message = Some(format!("Theme: {}", app.theme_choice.label()));
             return Ok(());
         }
 

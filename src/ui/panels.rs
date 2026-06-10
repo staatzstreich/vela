@@ -3,12 +3,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
 use crate::app::{ActivePanel, App, PanelState};
+use crate::ui::theme::Theme;
 use std::collections::HashSet;
 
 // Column widths (in characters)
@@ -27,11 +28,12 @@ pub fn render_panel(
     label: &str,
     show_permissions: bool,
     marked: &HashSet<usize>,
+    theme: &Theme,
 ) {
     let border_style = if is_active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme.panel_active_border)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.panel_inactive_border)
     };
 
     let title = format!(" {} — {} ", label, panel.path.display());
@@ -58,14 +60,14 @@ pub fn render_panel(
             let is_marked = marked.contains(&idx);
 
             let (icon, base_style) = if e.is_dir {
-                ("▶ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                ("▶ ", Style::default().fg(theme.directory_icon).add_modifier(Modifier::BOLD))
             } else {
-                ("  ", Style::default().fg(Color::White))
+                ("  ", Style::default().fg(theme.file_name))
             };
 
-            // Marked entries get a distinct name style (bright yellow).
+            // Marked entries get a distinct name style.
             let name_style = if is_marked {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default().fg(theme.marked_entry).add_modifier(Modifier::BOLD)
             } else {
                 base_style
             };
@@ -86,7 +88,7 @@ pub fn render_panel(
                 // Mark indicator replaces the icon's first char slot
                 Span::styled(
                     mark_str,
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.mark_indicator).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(icon, base_style),
                 Span::styled(
@@ -94,9 +96,9 @@ pub fn render_panel(
                     name_style,
                 ),
                 Span::raw("  "),
-                Span::styled(size_str, Style::default().fg(Color::Gray)),
+                Span::styled(size_str, Style::default().fg(theme.size_text)),
                 Span::raw("  "),
-                Span::styled(date_str, Style::default().fg(Color::DarkGray)),
+                Span::styled(date_str, Style::default().fg(theme.date_text)),
             ];
 
             if show_permissions {
@@ -106,7 +108,7 @@ pub fn render_panel(
                 };
                 spans.push(Span::styled(
                     perm_str,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.permission_text),
                 ));
             }
 
@@ -120,11 +122,11 @@ pub fn render_panel(
     let list = List::new(items)
         .highlight_style(
             Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("► ");
+        .highlight_symbol(theme.highlight_symbol);
 
     frame.render_stateful_widget(list, inner, &mut list_state);
 }
@@ -132,7 +134,7 @@ pub fn render_panel(
 /// Render both panels side by side.
 /// When `app.panels_swapped` is true the remote panel appears on the left and
 /// the local panel on the right — purely visual, the data model is unchanged.
-pub fn render_panels(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render_panels(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
     let mid = area.width / 2;
     let left_area = Rect { x: area.x,       y: area.y, width: mid,              height: area.height };
     let right_area = Rect { x: area.x + mid, y: area.y, width: area.width - mid, height: area.height };
@@ -163,6 +165,7 @@ pub fn render_panels(frame: &mut Frame, app: &App, area: Rect) {
         "Local",
         false,
         &app.left.marked.clone(),
+        theme,
     );
     render_panel(
         frame,
@@ -172,6 +175,7 @@ pub fn render_panels(frame: &mut Frame, app: &App, area: Rect) {
         &remote_label,
         connected,
         &app.right.marked.clone(),
+        theme,
     );
 }
 

@@ -1,12 +1,13 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
 
 use crate::transfer::queue::TransferHandle;
+use crate::ui::theme::Theme;
 
 /// Render the function-key hint bar (and optional transfer progress) at the bottom.
 /// `connected` controls whether F3-Disconnect is shown.
@@ -18,13 +19,14 @@ pub fn render_statusbar(
     message: Option<&str>,
     upload: Option<&TransferHandle>,
     download: Option<&TransferHandle>,
+    theme: &Theme,
 ) {
     if let Some(handle) = upload {
-        render_transfer_bar(frame, area, handle, message, TransferKind::Upload);
+        render_transfer_bar(frame, area, handle, message, TransferKind::Upload, theme);
     } else if let Some(handle) = download {
-        render_transfer_bar(frame, area, handle, message, TransferKind::Download);
+        render_transfer_bar(frame, area, handle, message, TransferKind::Download, theme);
     } else {
-        render_hint_bar(frame, area, connected, message);
+        render_hint_bar(frame, area, connected, message, theme);
     }
 }
 
@@ -32,7 +34,7 @@ pub fn render_statusbar(
 // Hint bar (normal mode)
 // ---------------------------------------------------------------------------
 
-fn render_hint_bar(frame: &mut Frame, area: Rect, connected: bool, message: Option<&str>) {
+fn render_hint_bar(frame: &mut Frame, area: Rect, connected: bool, message: Option<&str>, theme: &Theme) {
     // Split into 2 rows; hints on row 0, status message on row 1.
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -62,33 +64,33 @@ fn render_hint_bar(frame: &mut Frame, area: Rect, connected: bool, message: Opti
     for (key, label) in &hints {
         let key_style = if *key == "F3" && connected {
             Style::default()
-                .bg(Color::Red)
-                .fg(Color::White)
+                .bg(theme.hint_badge_danger_bg)
+                .fg(theme.hint_badge_fg)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::White)
+                .bg(theme.hint_badge_bg)
+                .fg(theme.hint_badge_fg)
                 .add_modifier(Modifier::BOLD)
         };
         spans.push(Span::styled(format!(" {} ", key), key_style));
         spans.push(Span::styled(
             format!("{} ", label),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.hint_label),
         ));
     }
 
     let hint_line = Line::from(spans);
-    let hint_para = Paragraph::new(hint_line).style(Style::default().bg(Color::Black));
+    let hint_para = Paragraph::new(hint_line).style(Style::default().bg(theme.hint_bar_bg));
     frame.render_widget(hint_para, rows[0]);
 
     // --- Row 1: Status message (if any) ---
     let msg_text = message.unwrap_or("");
     let msg_line = Line::from(vec![Span::styled(
         format!(" {}", msg_text),
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(theme.status_message),
     )]);
-    let msg_para = Paragraph::new(msg_line).style(Style::default().bg(Color::Black));
+    let msg_para = Paragraph::new(msg_line).style(Style::default().bg(theme.hint_bar_bg));
     frame.render_widget(msg_para, rows[1]);
 }
 
@@ -107,6 +109,7 @@ fn render_transfer_bar(
     handle: &TransferHandle,
     _message: Option<&str>,
     kind: TransferKind,
+    theme: &Theme,
 ) {
     // Read progress without holding the lock for long.
     let (file_name, files_done, files_total, fraction) = {
@@ -120,8 +123,8 @@ fn render_transfer_bar(
     };
 
     let (verb, bar_color) = match kind {
-        TransferKind::Upload => ("Upload", Color::Green),
-        TransferKind::Download => ("Download", Color::Cyan),
+        TransferKind::Upload => ("Upload", theme.upload_bar),
+        TransferKind::Download => ("Download", theme.download_bar),
     };
 
     // Split the 2-row status area: row 0 = progress bar, row 1 = filename.
@@ -171,13 +174,13 @@ fn render_transfer_bar(
         Span::styled(
             filled_str,
             Style::default()
-                .fg(Color::Black)
+                .fg(theme.transfer_filled_fg)
                 .bg(bar_color)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             empty_str,
-            Style::default().fg(bar_color).bg(Color::DarkGray),
+            Style::default().fg(bar_color).bg(theme.transfer_empty_bg),
         ),
     ]);
 
@@ -199,9 +202,9 @@ fn render_transfer_bar(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             detail,
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.filename_text),
         )))
-        .style(Style::default().bg(Color::Black)),
+        .style(Style::default().bg(theme.transfer_row_bg)),
         rows[1],
     );
 }
