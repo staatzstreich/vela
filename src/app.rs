@@ -17,7 +17,7 @@ use crate::connection::sftp::{
 use crate::transfer::queue::{
     ProgressHandle, TransferHandle, TransferProgress, TransferState, UploadProgress, UploadState,
 };
-use crate::ui::theme::{load_theme_choice, ThemeChoice};
+use crate::ui::theme::{ensure_themes, load_theme_choice, ThemeChoice};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -772,6 +772,7 @@ impl App {
             _ => {}
         }
         app.start_local_watcher();
+        ensure_themes();
         Ok(app)
     }
 

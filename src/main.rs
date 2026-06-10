@@ -15,7 +15,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use app::{ActivePanel, App, AppError, EditRequest, ProfileDialogMode};
 use config::profiles::AuthMethod;
-use ui::theme::save_theme_choice;
+use ui::theme::{custom_theme_names, save_theme_choice, ThemeChoice};
 
 fn main() -> Result<(), AppError> {
     let mut terminal = setup_terminal()?;
@@ -166,10 +166,11 @@ fn handle_events(app: &mut App) -> Result<(), AppError> {
             return Ok(());
         }
 
-        // Ctrl+T — cycle theme: Auto → Dark → Light → Auto
+        // Ctrl+T — cycle theme: Auto → Dark → Light → custom1 → custom2 → ... → Auto
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
-            app.theme_choice = app.theme_choice.next();
-            save_theme_choice(app.theme_choice);
+            let customs = custom_theme_names();
+            app.theme_choice = next_theme(&app.theme_choice, &customs);
+            save_theme_choice(&app.theme_choice);
             app.status_message = Some(format!("Theme: {}", app.theme_choice.label()));
             return Ok(());
         }
@@ -290,6 +291,30 @@ fn handle_main_key(app: &mut App, code: KeyCode) -> Result<(), AppError> {
         _ => {}
     }
     Ok(())
+}
+
+/// Cycle theme: Auto → Dark → Light → custom1 → custom2 → ... → Auto
+fn next_theme(current: &ThemeChoice, customs: &[String]) -> ThemeChoice {
+    let list = build_cycle_list(customs);
+    let pos = list.iter().position(|t| match (t, current) {
+        (ThemeChoice::Auto, ThemeChoice::Auto) => true,
+        (ThemeChoice::Dark, ThemeChoice::Dark) => true,
+        (ThemeChoice::Light, ThemeChoice::Light) => true,
+        (ThemeChoice::Custom(a), ThemeChoice::Custom(b)) => a == b,
+        _ => false,
+    });
+    match pos {
+        Some(i) => list[(i + 1) % list.len()].clone(),
+        None => ThemeChoice::Auto,
+    }
+}
+
+fn build_cycle_list(customs: &[String]) -> Vec<ThemeChoice> {
+    let mut v = vec![ThemeChoice::Auto, ThemeChoice::Dark, ThemeChoice::Light];
+    for name in customs {
+        v.push(ThemeChoice::Custom(name.clone()));
+    }
+    v
 }
 
 // ---------------------------------------------------------------------------
