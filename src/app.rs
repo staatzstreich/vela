@@ -1161,6 +1161,74 @@ impl App {
         self.left.clear_marks();
     }
 
+    /// Handle a bracketed-paste event: if the pasted text contains valid local
+    /// paths (from a Finder drag-and-drop), upload them to the remote directory.
+    pub fn handle_paste_drop(&mut self, text: &str) {
+        let paths = parse_dropped_paths(text);
+        if paths.is_empty() {
+            return;
+        }
+        if !self.is_connected() {
+            self.status_message = Some("Kein Server verbunden — Drag & Drop nicht möglich".to_string());
+            return;
+        }
+        if self.is_transferring() {
+            self.status_message = Some("Transfer läuft bereits".to_string());
+            return;
+        }
+        self.start_upload_from_paths(paths);
+    }
+
+    /// Upload an explicit list of local paths to the current remote directory.
+    /// Reuses the existing upload infrastructure; the remote filename is the
+    /// basename of each dropped path.
+    pub fn start_upload_from_paths(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() || !self.is_connected() || self.is_uploading() {
+            return;
+        }
+
+        let remote_dir = self.right.path.clone();
+        let (profile, saved_pw) = match &self.sftp {
+            Some(conn) => (conn.profile.clone(), conn.saved_password.clone()),
+            None => return,
+        };
+
+        // Build FileEntry list. We set name = full absolute path and base = "/".
+        // upload_batch does `base.join(name)`; on Unix joining an absolute path
+        // replaces the base, so the result is the original full path.
+        let base_path = PathBuf::from("/");
+        let entries: Vec<FileEntry> = paths
+            .iter()
+            .map(|p| FileEntry {
+                name: p.to_string_lossy().to_string(),
+                is_dir: p.is_dir(),
+                size: None,
+                modified: None,
+                permissions: None,
+            })
+            .collect();
+
+        let total_files = paths.iter().map(|p| count_files(p)).sum::<usize>().max(1);
+        let handle: ProgressHandle = Arc::new(Mutex::new(UploadProgress::new(total_files)));
+        let handle_clone = Arc::clone(&handle);
+
+        let label = if paths.len() == 1 {
+            paths[0]
+                .file_name()
+                .map(|n| format!("'{}'", n.to_string_lossy()))
+                .unwrap_or_else(|| paths[0].to_string_lossy().to_string())
+        } else {
+            format!("{} Dateien", paths.len())
+        };
+
+        std::thread::spawn(move || {
+            upload_batch(profile, saved_pw, entries, base_path, remote_dir, handle_clone);
+        });
+
+        self.upload_progress = Some(handle);
+        self.status_message = Some(format!("Uploading {}…", label));
+    }
+
     /// Poll the upload handle; refresh remote listing on completion.
     /// Should be called once per render frame.
     pub fn poll_upload(&mut self) {
@@ -1830,4 +1898,59 @@ fn dirs_or_cwd() -> PathBuf {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/"))
         })
+}
+
+/// Parse file paths from a bracketed-paste string produced by dragging files
+/// onto the terminal window (macOS Terminal.app, iTerm2, Alacritty, etc.).
+///
+/// Terminals escape spaces in paths with backslash (`\ `). Multiple paths are
+/// separated by whitespace or newlines. We unescape backslash-spaces first,
+/// then split on whitespace, and accept only tokens that are absolute paths
+/// that exist on disk — this filters out accidental plain-text pastes.
+///
+/// macOS APFS stores filenames in NFD while terminal apps often paste in NFC
+/// (or vice versa). We try NFC and NFD so that umlauts and other non-ASCII
+/// characters in filenames are handled correctly on both HFS+ and APFS.
+fn parse_dropped_paths(text: &str) -> Vec<PathBuf> {
+    use unicode_normalization::UnicodeNormalization;
+
+    // Terminals escape ALL shell-special characters with backslash when pasting
+    // drag-and-drop paths (spaces → `\ `, pipe → `\|`, parens → `\(` etc.).
+    // We parse character-by-character: `\X` yields X literally, bare whitespace
+    // is a token separator.
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                current.push(next);
+            }
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    let mut paths = Vec::new();
+    for candidate in tokens {
+        // macOS APFS stores filenames in NFD; terminal apps often paste NFC.
+        // Try both normalization forms so umlauts and other non-ASCII names work.
+        let nfc: String = candidate.nfc().collect();
+        let nfd: String = candidate.nfd().collect();
+        for form in [nfc.as_str(), nfd.as_str(), candidate.as_str()] {
+            let p = PathBuf::from(form);
+            if p.is_absolute() && p.exists() {
+                paths.push(p);
+                break;
+            }
+        }
+    }
+    paths
 }

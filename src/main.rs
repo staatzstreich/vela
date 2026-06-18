@@ -7,7 +7,7 @@ mod ui;
 use std::io;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -27,14 +27,14 @@ fn main() -> Result<(), AppError> {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>, AppError> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     Ok(Terminal::new(backend)?)
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<(), AppError> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -140,61 +140,78 @@ fn handle_events(app: &mut App) -> Result<(), AppError> {
         return Ok(());
     }
 
-    if let Event::Key(key) = event::read()? {
-        if key.kind != KeyEventKind::Press {
-            return Ok(());
-        }
-
-        // F1 toggles the help overlay from any context.
-        // Esc closes it when it is visible.
-        if key.code == KeyCode::F(1) {
-            app.help_visible = !app.help_visible;
-            return Ok(());
-        }
-        if app.help_visible {
-            if key.code == KeyCode::Esc {
-                app.help_visible = false;
+    match event::read()? {
+        Event::Key(key) => {
+            if key.kind != KeyEventKind::Press {
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        // Ctrl+U / Ctrl+S — swap panels visually (works from any mode)
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('u') | KeyCode::Char('s'))
-        {
-            app.swap_panels();
-            return Ok(());
-        }
+            // F1 toggles the help overlay from any context.
+            // Esc closes it when it is visible.
+            if key.code == KeyCode::F(1) {
+                app.help_visible = !app.help_visible;
+                return Ok(());
+            }
+            if app.help_visible {
+                if key.code == KeyCode::Esc {
+                    app.help_visible = false;
+                }
+                return Ok(());
+            }
 
-        // Ctrl+T — cycle theme: Auto → Dark → Light → custom1 → custom2 → ... → Auto
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
-            let customs = custom_theme_names();
-            app.theme_choice = next_theme(&app.theme_choice, &customs);
-            save_theme_choice(&app.theme_choice);
-            app.status_message = Some(format!("Theme: {}", app.theme_choice.label()));
-            return Ok(());
-        }
+            // Ctrl+U / Ctrl+S — swap panels visually (works from any mode)
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('u') | KeyCode::Char('s'))
+            {
+                app.swap_panels();
+                return Ok(());
+            }
 
-        // Priority (highest first): host_key > permission > password > delete > rename > mkdir > shell > profile > main
-        if app.host_key_dialog.is_some() {
-            handle_host_key_key(app, key.code);
-        } else if app.permission_dialog.is_some() {
-            handle_permission_key(app, key.code);
-        } else if app.password_dialog.is_some() {
-            handle_password_key(app, key.code);
-        } else if app.delete_dialog.is_some() {
-            handle_delete_key(app, key.code);
-        } else if app.rename_dialog.is_some() {
-            handle_rename_key(app, key.code);
-        } else if app.mkdir_dialog.is_some() {
-            handle_mkdir_key(app, key.code);
-        } else if app.shell_dialog.is_some() {
-            handle_shell_key(app, key.code);
-        } else if app.profile_dialog.is_some() {
-            handle_dialog_key(app, key.code);
-        } else {
-            handle_main_key(app, key.code)?;
+            // Ctrl+T — cycle theme: Auto → Dark → Light → custom1 → custom2 → ... → Auto
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+                let customs = custom_theme_names();
+                app.theme_choice = next_theme(&app.theme_choice, &customs);
+                save_theme_choice(&app.theme_choice);
+                app.status_message = Some(format!("Theme: {}", app.theme_choice.label()));
+                return Ok(());
+            }
+
+            // Priority (highest first): host_key > permission > password > delete > rename > mkdir > shell > profile > main
+            if app.host_key_dialog.is_some() {
+                handle_host_key_key(app, key.code);
+            } else if app.permission_dialog.is_some() {
+                handle_permission_key(app, key.code);
+            } else if app.password_dialog.is_some() {
+                handle_password_key(app, key.code);
+            } else if app.delete_dialog.is_some() {
+                handle_delete_key(app, key.code);
+            } else if app.rename_dialog.is_some() {
+                handle_rename_key(app, key.code);
+            } else if app.mkdir_dialog.is_some() {
+                handle_mkdir_key(app, key.code);
+            } else if app.shell_dialog.is_some() {
+                handle_shell_key(app, key.code);
+            } else if app.profile_dialog.is_some() {
+                handle_dialog_key(app, key.code);
+            } else {
+                handle_main_key(app, key.code)?;
+            }
         }
+        // Bracketed paste: terminals send file paths when files are dragged onto the window.
+        Event::Paste(text) => {
+            let no_dialog = app.host_key_dialog.is_none()
+                && app.permission_dialog.is_none()
+                && app.password_dialog.is_none()
+                && app.delete_dialog.is_none()
+                && app.rename_dialog.is_none()
+                && app.mkdir_dialog.is_none()
+                && app.shell_dialog.is_none()
+                && app.profile_dialog.is_none();
+            if no_dialog {
+                app.handle_paste_drop(&text);
+            }
+        }
+        _ => {}
     }
 
     Ok(())

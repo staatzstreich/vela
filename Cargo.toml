@@ -17,3 +17,4 @@ keyring = { version = "3", features = ["apple-native", "sync-secret-service"] }
 zeroize = { version = "1", features = ["derive"] }
 tempfile = "3"
 shell-words = "1"
+unicode-normalization = "0.1"
